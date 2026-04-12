@@ -75,7 +75,11 @@ jobs:
       - name: Build firmware
         run: |
           cd openwrt
-          make -j$(nproc) || make -j1 V=s 2>&1 | tail -100
+          if ! make -j$(nproc); then
+            echo "Parallel build failed, retrying with verbose single-job..."
+            make -j1 V=s 2>&1 | tail -150
+            exit 1
+          fi
 
       - name: Collect firmware
         run: |
