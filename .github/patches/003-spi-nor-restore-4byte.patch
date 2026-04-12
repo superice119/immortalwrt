@@ -1,0 +1,15 @@
+--- a/drivers/mtd/spi-nor/core.c
++++ b/drivers/mtd/spi-nor/core.c
+@@ -3049,9 +3049,10 @@ EXPORT_SYMBOL_GPL(spi_nor_scan);
+ void spi_nor_restore(struct spi_nor *nor)
+ {
+ /* restore the addressing mode */
+-if (nor->addr_width == 4 && !(nor->flags & SNOR_F_4B_OPCODES) &&
+-    nor->flags & SNOR_F_BROKEN_RESET)
++if (nor->addr_width == 4) {
++dev_info(nor->dev, "%s: restoring to 3-byte addressing mode\n",
++ nor->info->name);
+ nor->params->set_4byte_addr_mode(nor, false);
++}
+ }
+ EXPORT_SYMBOL_GPL(spi_nor_restore);
