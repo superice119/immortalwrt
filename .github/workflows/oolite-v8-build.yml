@@ -1,8 +1,11 @@
-name: Build ImmortalWrt for Oolite V8
+name: Build ImmortalWrt for GainStrong Oolite V8
 
 on:
   push:
     branches: [ openwrt-23.05 ]
+    paths:
+      - '.github/workflows/oolite-v8-build.yml'
+      - '.github/patches/**'
   workflow_dispatch:
 
 jobs:
@@ -11,223 +14,43 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
+      - name: Checkout repo (patches)
+        uses: actions/checkout@v4
+        with:
+          ref: openwrt-23.05
+          path: meta
+
       - name: Install dependencies
         run: |
-          sudo apt-get update
+          sudo apt-get update -qq
           sudo apt-get install -y \
             build-essential clang flex bison g++ gawk gcc-multilib \
             g++-multilib gettext git libncurses-dev libssl-dev \
-            python3-distutils rsync unzip zlib1g-dev file wget \
-            qemu-utils
+            python3-distutils rsync unzip zlib1g-dev file wget
 
-      - name: Clone ImmortalWrt (openwrt-23.05)
+      - name: Clone ImmortalWrt openwrt-23.05
         run: |
           git clone --depth=1 -b openwrt-23.05 \
             https://github.com/immortalwrt/immortalwrt.git openwrt
-          cd openwrt
-          echo "ImmortalWrt commit: $(git rev-parse HEAD)"
+          echo "ImmortalWrt: $(git -C openwrt rev-parse --short HEAD)"
 
-      - name: Apply patch 1 - Add Oolite V8 DTS
+      - name: Apply DTS for Oolite V8
+        run: |
+          cp meta/.github/patches/001-mt7621_gainstrong_oolite-v8.dts \
+             openwrt/target/linux/ramips/dts/mt7621_gainstrong_oolite-v8.dts
+          echo "DTS installed."
+
+      - name: Patch mt7621.mk - Add Oolite V8 device entry
         run: |
           cd openwrt
-          cat > target/linux/ramips/dts/mt7621_gainstrong_oolite-v8.dts << 'DTSEOF'
-// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
+          python3 ../meta/.github/patches/002-patch-mt7621-mk.py
+          grep -A6 "gainstrong_oolite-v8" target/linux/ramips/image/mt7621.mk | head -8
 
-#include "mt7621.dtsi"
-
-#include <dt-bindings/gpio/gpio.h>
-#include <dt-bindings/input/input.h>
-
-/ {
-	compatible = "gainstrong,oolite-v8", "mediatek,mt7621-soc";
-	model = "GainStrong Oolite V8.X";
-
-	chosen {
-		bootargs = "console=ttyS0,115200n8";
-	};
-
-	keys {
-		compatible = "gpio-keys";
-
-		reset {
-			label = "reset";
-			gpios = <&gpio 18 GPIO_ACTIVE_LOW>;
-			linux,code = <KEY_RESTART>;
-		};
-	};
-
-	leds {
-		compatible = "gpio-leds";
-
-		system {
-			label = "green:system";
-			gpios = <&gpio 0 GPIO_ACTIVE_HIGH>;
-		};
-	};
-};
-
-&sdhci {
-	status = "okay";
-};
-
-&spi0 {
-	status = "okay";
-
-	flash@0 {
-		compatible = "jedec,spi-nor";
-		reg = <0>;
-		spi-max-frequency = <40000000>;
-		m25p,fast-read;
-
-		partitions {
-			compatible = "fixed-partitions";
-			#address-cells = <1>;
-			#size-cells = <1>;
-
-			partition@0 {
-				label = "u-boot";
-				reg = <0x0 0x30000>;
-				read-only;
-			};
-
-			partition@30000 {
-				label = "u-boot-env";
-				reg = <0x30000 0x10000>;
-			};
-
-			factory: partition@40000 {
-				label = "factory";
-				reg = <0x40000 0x10000>;
-				read-only;
-			};
-
-			partition@50000 {
-				compatible = "denx,uimage";
-				label = "firmware";
-				reg = <0x50000 0x1fb0000>;
-			};
-		};
-	};
-};
-
-&pcie {
-	status = "okay";
-	reset-gpios = <&gpio 19 GPIO_ACTIVE_LOW>,
-	              <0>,
-	              <&gpio 7 GPIO_ACTIVE_LOW>;
-};
-
-&pcie0 {
-	wifi@0,0 {
-		compatible = "mediatek,mt76";
-		reg = <0x0 0 0 0 0>;
-		mediatek,mtd-eeprom = <&factory 0x0>;
-	};
-};
-
-&pcie1 {
-	wifi@0,0 {
-		compatible = "mediatek,mt76";
-		reg = <0x0 0 0 0 0>;
-		mediatek,mtd-eeprom = <&factory 0x8000>;
-	};
-};
-
-&factory {
-	compatible = "nvmem-cells";
-	#address-cells = <1>;
-	#size-cells = <1>;
-
-	macaddr_factory_28: macaddr@28 {
-		reg = <0x28 0x6>;
-	};
-
-	macaddr_factory_2e: macaddr@2e {
-		reg = <0x2e 0x6>;
-	};
-};
-
-&gmac0 {
-	nvmem-cells = <&macaddr_factory_28>;
-	nvmem-cell-names = "mac-address";
-};
-
-&switch0 {
-	ports {
-		port@0 {
-			status = "okay";
-			label = "lan1";
-		};
-		port@1 {
-			status = "okay";
-			label = "lan2";
-		};
-		port@2 {
-			status = "okay";
-			label = "lan3";
-		};
-		port@3 {
-			status = "okay";
-			label = "lan4";
-		};
-		port@4 {
-			status = "okay";
-			label = "wan";
-			nvmem-cells = <&macaddr_factory_2e>;
-			nvmem-cell-names = "mac-address";
-		};
-	};
-};
-
-&state_default {
-	gpio {
-		groups = "jtag", "uart3", "wdt";
-		function = "gpio";
-	};
-};
-DTSEOF
-          echo "DTS file created."
-
-      - name: Apply patch 2 - Add Oolite V8 to mt7621.mk
+      - name: Apply kernel patch - 32MB NOR flash reboot fix
         run: |
-          cd openwrt
-          # Insert device definition before adslr_g7
-          sed -i '/^define Device\/adslr_g7/i\
-define Device\/gainstrong_oolite-v8\
-  $(Device\/dsa-migration)\
-  $(Device\/uimage-lzma-loader)\
-  DEVICE_VENDOR := GainStrong\
-  DEVICE_MODEL := Oolite V8.X\
-  DEVICE_PACKAGES := kmod-mt7603 kmod-mt7615e kmod-mt7663-firmware-ap \\\
-    kmod-usb3 kmod-sdhci-mt7620 kmod-ata-ahci\
-  IMAGE_SIZE := 32448k\
-endef\
-TARGET_DEVICES += gainstrong_oolite-v8\
-' target/linux/ramips/image/mt7621.mk
-          echo "mt7621.mk patched."
-          grep -A8 "gainstrong_oolite-v8" target/linux/ramips/image/mt7621.mk | head -12
-
-      - name: Apply patch 3 - Fix 32MB flash reboot hang (kernel 5.15)
-        run: |
-          cd openwrt
-          cat > target/linux/ramips/patches-5.15/499-fix-32mb-flash-reboot-hang.patch << 'PATCHEOF'
---- a/drivers/mtd/spi-nor/core.c
-+++ b/drivers/mtd/spi-nor/core.c
-@@ -3049,9 +3049,10 @@ EXPORT_SYMBOL_GPL(spi_nor_scan);
- void spi_nor_restore(struct spi_nor *nor)
- {
- 	/* restore the addressing mode */
--	if (nor->addr_width == 4 && !(nor->flags & SNOR_F_4B_OPCODES) &&
--	    nor->flags & SNOR_F_BROKEN_RESET)
-+	if (nor->addr_width == 4) {
-+		dev_info(nor->dev, "%s: restoring from 4-byte to 3-byte addressing mode\n",
-+			 nor->info->name);
- 		nor->params->set_4byte_addr_mode(nor, false);
-+	}
- }
- EXPORT_SYMBOL_GPL(spi_nor_restore);
-PATCHEOF
-          echo "Flash reboot fix patch added."
+          cp meta/.github/patches/003-spi-nor-restore-4byte.patch \
+             openwrt/target/linux/ramips/patches-5.15/499-spi-nor-restore-4byte.patch
+          echo "Kernel patch installed."
 
       - name: Update feeds
         run: |
@@ -235,39 +58,12 @@ PATCHEOF
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Configure build for Oolite V8
+      - name: Configure build
         run: |
+          cp meta/.github/patches/004-dot-config openwrt/.config
           cd openwrt
-          cat > .config << 'EOF'
-CONFIG_TARGET_ramips=y
-CONFIG_TARGET_ramips_mt7621=y
-CONFIG_TARGET_ramips_mt7621_DEVICE_gainstrong_oolite-v8=y
-
-CONFIG_PACKAGE_luci=y
-CONFIG_LUCI_LANG_zh_Hans=y
-CONFIG_LUCI_LANG_en=y
-CONFIG_PACKAGE_luci-theme-bootstrap=y
-
-CONFIG_PACKAGE_kmod-usb-storage=y
-CONFIG_PACKAGE_kmod-ata-ahci=y
-CONFIG_PACKAGE_kmod-fs-vfat=y
-CONFIG_PACKAGE_kmod-fs-exfat=y
-CONFIG_PACKAGE_kmod-fs-ntfs=y
-CONFIG_PACKAGE_kmod-fs-ext4=y
-CONFIG_PACKAGE_usbutils=y
-CONFIG_PACKAGE_pciutils=y
-
-CONFIG_PACKAGE_kmod-usb-net-rndis=y
-CONFIG_PACKAGE_kmod-usb-net-qmi-wwan=y
-CONFIG_PACKAGE_luci-proto-qmi=y
-
-CONFIG_IMAGEOPT=y
-CONFIG_VERSIONOPT=y
-CONFIG_VERSION_PRODUCT="Oolite-V8.X"
-CONFIG_VERSION_FILENAMES=y
-EOF
-          make defconfig
-          echo "Build config:"
+          make defconfig 2>&1 | tail -5
+          echo "Target:"
           grep "DEVICE_gainstrong" .config
 
       - name: Download packages
@@ -279,7 +75,7 @@ EOF
       - name: Build firmware
         run: |
           cd openwrt
-          make -j$(nproc) || make -j1 V=s 2>&1 | tail -50
+          make -j$(nproc) || make -j1 V=s 2>&1 | tail -100
 
       - name: Collect firmware
         run: |
@@ -287,7 +83,7 @@ EOF
           find openwrt/bin/targets/ramips/mt7621/ -name "*.bin" -exec cp {} firmware/ \;
           ls -lh firmware/
 
-      - name: Upload firmware
+      - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
           name: immortalwrt-oolite-v8-${{ github.run_number }}
