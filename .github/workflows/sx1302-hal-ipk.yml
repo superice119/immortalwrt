@@ -29,6 +29,7 @@ jobs:
           SDK_URL="https://downloads.immortalwrt.org/releases/23.05-SNAPSHOT/targets/ramips/mt7621/immortalwrt-sdk-23.05-SNAPSHOT-ramips-mt7621_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
           wget -q --show-progress "$SDK_URL"
           tar xf immortalwrt-sdk-*.tar.xz
+          rm -f immortalwrt-sdk-*.tar.xz
           mv immortalwrt-sdk-* sdk
           echo "SDK ready: $(ls sdk/staging_dir/)"
 
