@@ -63,8 +63,8 @@ define Package/sx1302-hal/install
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/packet_forwarder/lora_pkt_fwd $(1)/usr/sbin/
 
 	$(INSTALL_DIR) $(1)/etc/lora
-	$(INSTALL_CONF) $(PKG_BUILD_DIR)/packet_forwarder/global_conf.json.sx1250.USB868 \
-		$(1)/etc/lora/global_conf.json
+	$(CP) $(PKG_BUILD_DIR)/packet_forwarder/global_conf.json.sx1250.* \
+		$(1)/etc/lora/
 
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/lora_pkt_fwd.init $(1)/etc/init.d/lora_pkt_fwd
