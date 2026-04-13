@@ -28,9 +28,10 @@ define Package/basicstation/description
 endef
 
 define Build/Configure
-	# musl libc doesn't expose fd_set/select via transitive includes (unlike glibc)
-	# CFLAGS.corecell is picked up by setup.gmk's xCFLAGS expansion
-	echo 'CFLAGS.corecell = -include sys/select.h' > $(PKG_BUILD_DIR)/setup-corecell.gmk
+	# musl libc fixes:
+	# 1. fd_set/select() requires explicit sys/select.h (not transitive in musl)
+	# 2. argp.h is GNU-only; CFG_argp activates basicstation's built-in argp.c
+	echo 'CFLAGS.corecell = -include sys/select.h -DCFG_argp' > $(PKG_BUILD_DIR)/setup-corecell.gmk
 endef
 
 define Build/Compile
