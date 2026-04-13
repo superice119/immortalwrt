@@ -43,33 +43,24 @@ jobs:
           TOOLCHAIN="$(pwd)/sdk/staging_dir/toolchain-mipsel_24kc_gcc-12.3.0_musl"
           export PATH="$TOOLCHAIN/bin:$PATH"
           CROSS="mipsel-openwrt-linux-musl-"
-          export CC="${CROSS}gcc"
-          export AR="${CROSS}ar"
-          export STRIP="${CROSS}strip"
-          export CFLAGS="-Os -mips32r2 -mtune=24kc -msoft-float -fno-plt -fno-caller-saves"
-          export LDFLAGS="-Wl,--gc-sections"
+          # Must set STAGING_DIR or OpenWrt GCC wrapper emits warnings
+          export STAGING_DIR="$TOOLCHAIN"
+          STRIP="${CROSS}strip"
 
-          echo "Compiler: $(${CC} --version | head -1)"
+          echo "Compiler: $(${CROSS}gcc --version | head -1)"
 
-          # 1. libloragw
-          echo "=== Building libloragw ==="
-          make -C sx1302_hal/libloragw CC="$CC" AR="$AR" CFLAGS="$CFLAGS" LDFLAGS="$LDFLAGS" -j$(nproc)
-
-          # 2. packet_forwarder (depends on libloragw)
-          echo "=== Building packet_forwarder ==="
-          make -C sx1302_hal/packet_forwarder CC="$CC" AR="$AR" CFLAGS="$CFLAGS" LDFLAGS="$LDFLAGS" -j$(nproc)
-
-          # 3. Utilities (best-effort)
-          for d in util_chip_id util_spectral_scan util_tx_test util_lgw_sing; do
-            echo "=== Building $d ==="
-            make -C sx1302_hal/$d CC="$CC" AR="$AR" CFLAGS="$CFLAGS" LDFLAGS="$LDFLAGS" -j$(nproc) || echo "WARN: $d skipped"
-          done
+          # Use CROSS_COMPILE= so each sub-Makefile sets CC/AR itself AND
+          # keeps its own CFLAGS (which include -Iinc etc.) intact.
+          # The root Makefile exports CROSS_COMPILE to all sub-makes via 'export'.
+          make -C sx1302_hal CROSS_COMPILE="$CROSS" \
+            all util_chip_id util_spectral_scan -j$(nproc)
 
           # Strip binaries
-          find sx1302_hal -maxdepth 2 -type f -perm /111 ! -name "*.sh" -exec "$STRIP" {} \; 2>/dev/null || true
+          find sx1302_hal -maxdepth 3 -type f -perm /111 ! -name "*.sh" \
+            -exec "$STRIP" {} \; 2>/dev/null || true
 
           echo "=== Built binaries ==="
-          find sx1302_hal -maxdepth 2 -type f -perm /111 ! -name "*.sh" | sort
+          find sx1302_hal -maxdepth 3 -type f -perm /111 ! -name "*.sh" | sort
 
       - name: Assemble IPK
         run: |
