@@ -1,4 +1,4 @@
-name: Build sx1302-hal IPK (SDK, mipsel_24kc)
+name: Build LoRa IPKs (SDK, mipsel_24kc)
 
 on:
   workflow_dispatch:
@@ -7,10 +7,12 @@ on:
     paths:
       - '.github/workflows/sx1302-hal-ipk.yml'
       - 'package/network/sx1302-hal/**'
+      - 'package/network/lora-gateway/**'
+      - 'package/network/packet-forwarder/**'
 
 jobs:
   build:
-    name: Build sx1302-hal with ImmortalWrt SDK
+    name: Build LoRa packages with ImmortalWrt SDK
     runs-on: ubuntu-22.04
 
     steps:
@@ -34,43 +36,54 @@ jobs:
           rm -f immortalwrt-sdk-*.tar.xz
           mv immortalwrt-sdk-* sdk
           echo "SDK_DIR=$(pwd)/sdk" >> "$GITHUB_ENV"
-          echo "SDK ready: $(ls sdk/staging_dir/)"
 
-      - name: Copy package into SDK
+      - name: Copy packages into SDK
         run: |
           mkdir -p "$SDK_DIR/package/network"
-          cp -r package/network/sx1302-hal "$SDK_DIR/package/network/sx1302-hal"
-          echo "Package copied to SDK"
+          cp -r package/network/lora-gateway    "$SDK_DIR/package/network/"
+          cp -r package/network/packet-forwarder "$SDK_DIR/package/network/"
+          cp -r package/network/sx1302-hal      "$SDK_DIR/package/network/"
+          echo "Packages copied."
 
-      - name: Update feeds and install dependencies
+      - name: Update feeds
         working-directory: sdk
         run: |
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Build sx1302-hal package
+      - name: Build lora-gateway (SX1301 HAL)
         working-directory: sdk
         run: |
           make defconfig
-          make package/network/sx1302-hal/compile V=s -j$(nproc) \
-            IGNORE_ERRORS=1
+          make package/network/lora-gateway/compile V=s -j$(nproc)
 
-      - name: Collect IPK
+      - name: Build packet-forwarder (SX1301, depends on lora-gateway)
+        working-directory: sdk
         run: |
-          IPK=$(find "$SDK_DIR/bin" -name "sx1302-hal_*.ipk" | head -1)
-          if [ -z "$IPK" ]; then
-            echo "ERROR: IPK not found!"
-            find "$SDK_DIR/bin" -name "*.ipk" | head -20
-            exit 1
-          fi
-          cp "$IPK" .
-          echo "=== IPK ==="
-          ls -lh sx1302-hal_*.ipk
-          echo "ipk_name=$(basename $IPK)" >> "$GITHUB_ENV"
+          make package/network/packet-forwarder/compile V=s -j$(nproc)
 
-      - name: Upload IPK artifact
+      - name: Build sx1302-hal (SX1302/SX1303 HAL + packet forwarder)
+        working-directory: sdk
+        run: |
+          make package/network/sx1302-hal/compile V=s -j$(nproc)
+
+      - name: Collect IPKs
+        run: |
+          mkdir -p artifacts
+          for pkg in lora-gateway packet-forwarder sx1302-hal; do
+            ipk=$(find "$SDK_DIR/bin" -name "${pkg}_*.ipk" | head -1)
+            if [ -n "$ipk" ]; then
+              cp "$ipk" artifacts/
+              echo "✅ $pkg: $(basename $ipk)"
+            else
+              echo "❌ $pkg: IPK not found!"
+            fi
+          done
+          ls -lh artifacts/
+
+      - name: Upload IPK artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: sx1302-hal-ipk-${{ github.run_number }}
-          path: sx1302-hal_*.ipk
+          name: lora-ipks-${{ github.run_number }}
+          path: artifacts/*.ipk
           retention-days: 90
