@@ -1,0 +1,139 @@
+name: Build sx1302_hal IPK (MT7621 mipsel_24kc)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ openwrt-23.05 ]
+    paths:
+      - '.github/workflows/sx1302-hal-ipk.yml'
+
+jobs:
+  build:
+    name: Cross-compile sx1302_hal for MT7621
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          ref: openwrt-23.05
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y build-essential libncurses-dev zlib1g-dev \
+            python3 file wget curl git binutils
+
+      - name: Download ImmortalWrt SDK (ramips/mt7621)
+        run: |
+          SDK_URL="https://downloads.immortalwrt.org/releases/23.05-SNAPSHOT/targets/ramips/mt7621/immortalwrt-sdk-23.05-SNAPSHOT-ramips-mt7621_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+          wget -q --show-progress "$SDK_URL"
+          tar xf immortalwrt-sdk-*.tar.xz
+          mv immortalwrt-sdk-* sdk
+          echo "SDK ready: $(ls sdk/staging_dir/)"
+
+      - name: Clone sx1302_hal (Semtech LoRa SX1302/SX1303 HAL)
+        run: |
+          git clone --depth=1 https://github.com/Lora-net/sx1302_hal.git
+          echo "sx1302_hal: $(git -C sx1302_hal rev-parse --short HEAD)"
+
+      - name: Cross-compile sx1302_hal
+        run: |
+          TOOLCHAIN="$(pwd)/sdk/staging_dir/toolchain-mipsel_24kc_gcc-12.3.0_musl"
+          export PATH="$TOOLCHAIN/bin:$PATH"
+          CROSS="mipsel-openwrt-linux-musl-"
+          export CC="${CROSS}gcc"
+          export AR="${CROSS}ar"
+          export STRIP="${CROSS}strip"
+          export CFLAGS="-Os -mips32r2 -mtune=24kc -msoft-float -fno-plt -fno-caller-saves"
+          export LDFLAGS="-Wl,--gc-sections"
+
+          echo "Compiler: $(${CC} --version | head -1)"
+
+          # 1. libloragw
+          echo "=== Building libloragw ==="
+          make -C sx1302_hal/libloragw CC="$CC" AR="$AR" CFLAGS="$CFLAGS" LDFLAGS="$LDFLAGS" -j$(nproc)
+
+          # 2. packet_forwarder (depends on libloragw)
+          echo "=== Building packet_forwarder ==="
+          make -C sx1302_hal/packet_forwarder CC="$CC" AR="$AR" CFLAGS="$CFLAGS" LDFLAGS="$LDFLAGS" -j$(nproc)
+
+          # 3. Utilities (best-effort)
+          for d in util_chip_id util_spectral_scan util_tx_test util_lgw_sing; do
+            echo "=== Building $d ==="
+            make -C sx1302_hal/$d CC="$CC" AR="$AR" CFLAGS="$CFLAGS" LDFLAGS="$LDFLAGS" -j$(nproc) || echo "WARN: $d skipped"
+          done
+
+          # Strip binaries
+          find sx1302_hal -maxdepth 2 -type f -perm /111 ! -name "*.sh" -exec "$STRIP" {} \; 2>/dev/null || true
+
+          echo "=== Built binaries ==="
+          find sx1302_hal -maxdepth 2 -type f -perm /111 ! -name "*.sh" | sort
+
+      - name: Assemble IPK
+        run: |
+          # ---- Staged file tree ----
+          mkdir -p ipk-root/usr/bin
+          mkdir -p ipk-root/etc/lora
+
+          # Main binaries
+          cp sx1302_hal/packet_forwarder/lora_pkt_fwd       ipk-root/usr/bin/
+          cp sx1302_hal/util_chip_id/chip_id                ipk-root/usr/bin/ 2>/dev/null || true
+          cp sx1302_hal/util_spectral_scan/spectral_scan     ipk-root/usr/bin/ 2>/dev/null || true
+          cp sx1302_hal/util_tx_test/tx_test                 ipk-root/usr/bin/ 2>/dev/null || true
+          cp sx1302_hal/util_lgw_sing/lgw_sing               ipk-root/usr/bin/ 2>/dev/null || true
+
+          # Config templates for USB-connected modules (WM1303 = ttyACM0)
+          for f in sx1302_hal/packet_forwarder/global_conf.json.sx1250.USB \
+                   sx1302_hal/packet_forwarder/global_conf.json.sx1250.EU868 \
+                   sx1302_hal/packet_forwarder/global_conf.json.sx1250.AS923; do
+            [ -f "$f" ] && cp "$f" ipk-root/etc/lora/ || true
+          done
+
+          ls -lh ipk-root/usr/bin/
+
+          # ---- control.tar.gz ----
+          INSTALLED_SIZE=$(du -sk ipk-root | cut -f1)
+          GIT_HASH=$(git -C sx1302_hal rev-parse --short HEAD)
+          PKG_VERSION="2.1.0-git${GIT_HASH}-1"
+
+          mkdir -p ctrl-root
+          cat > ctrl-root/control <<EOF
+          Package: sx1302-hal
+          Version: ${PKG_VERSION}
+          Architecture: mipsel_24kc
+          Maintainer: superice119 <superice@163.com>
+          Installed-Size: ${INSTALLED_SIZE}
+          Section: utils
+          Priority: optional
+          Depends: libc, libpthread
+          Description: Semtech SX1302/SX1303 LoRa Gateway HAL & packet forwarder.
+           Supports USB CDC (WM1303/RAK2287 via /dev/ttyACM0) and SPI modes.
+          EOF
+
+          # Remove leading whitespace from heredoc
+          sed -i 's/^          //' ctrl-root/control
+          cat ctrl-root/control
+
+          cd ctrl-root && tar czf ../control.tar.gz . && cd ..
+
+          # ---- data.tar.gz ----
+          cd ipk-root && tar czf ../data.tar.gz . && cd ..
+
+          # ---- debian-binary ----
+          printf '2.0\n' > debian-binary
+
+          # ---- assemble .ipk (ar archive) ----
+          IPK_NAME="sx1302-hal_${PKG_VERSION}_mipsel_24kc.ipk"
+          ar r "$IPK_NAME" debian-binary control.tar.gz data.tar.gz
+
+          echo "=== IPK created ==="
+          ls -lh "$IPK_NAME"
+          echo "ipk_name=$IPK_NAME" >> "$GITHUB_ENV"
+
+      - name: Upload IPK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sx1302-hal-ipk-${{ github.run_number }}
+          path: sx1302-hal_*.ipk
+          retention-days: 90
