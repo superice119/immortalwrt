@@ -28,8 +28,9 @@ define Package/basicstation/description
 endef
 
 define Build/Configure
-	# Override ARCH so setup.gmk doesn't try to find an arm toolchain
-	echo 'ARCH=mipsel-linux' > $(PKG_BUILD_DIR)/setup-corecell.gmk
+	# musl libc doesn't expose fd_set/select via transitive includes (unlike glibc)
+	# CFLAGS.corecell is picked up by setup.gmk's xCFLAGS expansion
+	echo 'CFLAGS.corecell = -include sys/select.h' > $(PKG_BUILD_DIR)/setup-corecell.gmk
 endef
 
 define Build/Compile
