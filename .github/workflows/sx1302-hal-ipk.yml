@@ -38,6 +38,7 @@ jobs:
 
       - name: Copy package into SDK
         run: |
+          mkdir -p "$SDK_DIR/package/network"
           cp -r package/network/sx1302-hal "$SDK_DIR/package/network/sx1302-hal"
           echo "Package copied to SDK"
 
