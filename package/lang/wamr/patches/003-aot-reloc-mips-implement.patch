@@ -1,3 +1,5 @@
+diff --git a/core/iwasm/aot/arch/aot_reloc_mips.c b/core/iwasm/aot/arch/aot_reloc_mips.c
+index 4b85611..d1b6433 100644
 --- a/core/iwasm/aot/arch/aot_reloc_mips.c
 +++ b/core/iwasm/aot/arch/aot_reloc_mips.c
 @@ -5,8 +5,10 @@
@@ -13,12 +15,25 @@
  
  /* clang-format off */
  static SymbolMap target_sym_map[] = {
-@@ -52,10 +54,43 @@ apply_relocation(AOTModule *module, uint8 *target_section_addr,
+@@ -52,10 +54,57 @@ apply_relocation(AOTModule *module, uint8 *target_section_addr,
                   int32 symbol_index, char *error_buf, uint32 error_buf_size)
  {
      switch (reloc_type) {
 -        /* TODO: implement relocation for mips */
--        case R_MIPS_26:
+         case R_MIPS_26:
++        {
++            /*
++             * J/JAL instruction: instr[25:0] = target_word_addr[25:0]
++             * target = (symbol + addend), word-addressed (>> 2).
++             */
++            uint8 *addr = target_section_addr + reloc_offset;
++            uint32 instr, target;
++            target = (uint32)((uintptr_t)symbol_addr + (int32)reloc_addend);
++            memcpy(&instr, addr, sizeof(uint32));
++            instr = (instr & 0xFC000000u) | ((target >> 2) & 0x03FFFFFFu);
++            memcpy(addr, &instr, sizeof(uint32));
++            return true;
++        }
          case R_MIPS_32:
 -
 +        {
