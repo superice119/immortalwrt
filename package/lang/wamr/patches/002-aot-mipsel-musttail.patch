@@ -1,0 +1,11 @@
+--- a/core/iwasm/compilation/aot_llvm.c
++++ b/core/iwasm/compilation/aot_llvm.c
+@@ -176,7 +176,7 @@ aot_target_precheck_can_use_musttail(const AOTCompContext *comp_ctx)
+          */
+         return false;
+     }
+-    if (!strcmp(comp_ctx->target_arch, "mips")) {
++    if (!strcmp(comp_ctx->target_arch, "mips") || !strcmp(comp_ctx->target_arch, "mipsel")) {
+         /*
+          * cf.
+          * https://github.com/bytecodealliance/wasm-micro-runtime/issues/2412
