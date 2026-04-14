@@ -1,5 +1,5 @@
 diff --git a/core/iwasm/aot/arch/aot_reloc_mips.c b/core/iwasm/aot/arch/aot_reloc_mips.c
-index 4b85611..d1b6433 100644
+index 4b85611..34f4954 100644
 --- a/core/iwasm/aot/arch/aot_reloc_mips.c
 +++ b/core/iwasm/aot/arch/aot_reloc_mips.c
 @@ -5,8 +5,10 @@
@@ -15,7 +15,7 @@ index 4b85611..d1b6433 100644
  
  /* clang-format off */
  static SymbolMap target_sym_map[] = {
-@@ -52,10 +54,57 @@ apply_relocation(AOTModule *module, uint8 *target_section_addr,
+@@ -52,10 +54,65 @@ apply_relocation(AOTModule *module, uint8 *target_section_addr,
                   int32 symbol_index, char *error_buf, uint32 error_buf_size)
  {
      switch (reloc_type) {
@@ -23,14 +23,22 @@ index 4b85611..d1b6433 100644
          case R_MIPS_26:
 +        {
 +            /*
-+             * J/JAL instruction: instr[25:0] = target_word_addr[25:0]
-+             * target = (symbol + addend), word-addressed (>> 2).
++             * J/JAL instruction: instr[25:0] = (old_field + S >> 2) & mask
++             *
++             * LLVM MIPS uses REL-style implicit addend even in RELA objects:
++             * the explicit r_addend is 0, and the pre-encoded intra-section
++             * word-offset lives in instr[25:0] (old_field).  We must ADD the
++             * runtime section base (S >> 2) to that field, not replace it.
++             *
++             *   new_field = (old_field + (S + A) >> 2) & 0x03FFFFFF
 +             */
 +            uint8 *addr = target_section_addr + reloc_offset;
-+            uint32 instr, target;
-+            target = (uint32)((uintptr_t)symbol_addr + (int32)reloc_addend);
++            uint32 instr, old_field, new_field;
++            uint32 S = (uint32)((uintptr_t)symbol_addr + (int32)reloc_addend);
 +            memcpy(&instr, addr, sizeof(uint32));
-+            instr = (instr & 0xFC000000u) | ((target >> 2) & 0x03FFFFFFu);
++            old_field = instr & 0x03FFFFFFu;
++            new_field = (old_field + (S >> 2)) & 0x03FFFFFFu;
++            instr = (instr & 0xFC000000u) | new_field;
 +            memcpy(addr, &instr, sizeof(uint32));
 +            return true;
 +        }
