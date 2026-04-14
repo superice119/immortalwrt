@@ -1,0 +1,62 @@
+--- a/core/iwasm/aot/arch/aot_reloc_mips.c
++++ b/core/iwasm/aot/arch/aot_reloc_mips.c
+@@ -5,8 +5,10 @@
+ 
+ #include "aot_reloc.h"
+ 
+-#define R_MIPS_32 2 /* Direct 32 bit */
+-#define R_MIPS_26 4 /* Direct 26 bit shifted */
++#define R_MIPS_32   2  /* Direct 32 bit */
++#define R_MIPS_26   4  /* Direct 26 bit shifted */
++#define R_MIPS_HI16 5  /* High 16 bits of symbol + addend */
++#define R_MIPS_LO16 6  /* Low 16 bits of symbol + addend */
+ 
+ /* clang-format off */
+ static SymbolMap target_sym_map[] = {
+@@ -52,10 +54,43 @@ apply_relocation(AOTModule *module, uint8 *target_section_addr,
+                  int32 symbol_index, char *error_buf, uint32 error_buf_size)
+ {
+     switch (reloc_type) {
+-        /* TODO: implement relocation for mips */
+-        case R_MIPS_26:
+         case R_MIPS_32:
+-
++        {
++            uint8 *addr = target_section_addr + reloc_offset;
++            uint32 val =
++                (uint32)((uintptr_t)symbol_addr + (int32)reloc_addend);
++            memcpy(addr, &val, sizeof(uint32));
++            return true;
++        }
++        case R_MIPS_HI16:
++        {
++            /*
++             * Instruction[15:0] = HI16 of (symbol + addend),
++             * adjusted for sign-extension of paired LO16.
++             */
++            uint8 *addr = target_section_addr + reloc_offset;
++            uint32 instr, val, hi;
++            val = (uint32)((uintptr_t)symbol_addr + (int32)reloc_addend);
++            hi = ((val + 0x8000u) >> 16) & 0xFFFFu;
++            memcpy(&instr, addr, sizeof(uint32));
++            instr = (instr & 0xFFFF0000u) | hi;
++            memcpy(addr, &instr, sizeof(uint32));
++            return true;
++        }
++        case R_MIPS_LO16:
++        {
++            /*
++             * Instruction[15:0] = LO16 of (symbol + addend).
++             */
++            uint8 *addr = target_section_addr + reloc_offset;
++            uint32 instr, val, lo;
++            val = (uint32)((uintptr_t)symbol_addr + (int32)reloc_addend);
++            lo = val & 0xFFFFu;
++            memcpy(&instr, addr, sizeof(uint32));
++            instr = (instr & 0xFFFF0000u) | lo;
++            memcpy(addr, &instr, sizeof(uint32));
++            return true;
++        }
+         default:
+             if (error_buf != NULL)
+                 snprintf(error_buf, error_buf_size,
