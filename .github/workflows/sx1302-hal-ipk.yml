@@ -8,7 +8,6 @@ on:
       - '.github/workflows/sx1302-hal-ipk.yml'
       - 'package/network/sx1302-hal/**'
       - 'package/network/basicstation/**'
-      - 'package/lang/wamr/**'
 
 jobs:
   build-sx1302-hal:
@@ -130,66 +129,4 @@ jobs:
         with:
           name: basicstation-ipk-${{ github.run_number }}
           path: basicstation_*.ipk
-          retention-days: 90
-
-  build-wamr:
-    name: Build wamr IPK
-    runs-on: ubuntu-22.04
-
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          ref: openwrt-23.05
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y \
-            build-essential libncurses-dev zlib1g-dev \
-            gawk gettext libssl-dev xsltproc rsync wget unzip python3 file \
-            cmake
-
-      - name: Download ImmortalWrt SDK (ramips/mt7621 23.05-SNAPSHOT)
-        run: |
-          SDK_URL="https://downloads.immortalwrt.org/releases/23.05-SNAPSHOT/targets/ramips/mt7621/immortalwrt-sdk-23.05-SNAPSHOT-ramips-mt7621_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
-          wget -q --show-progress "$SDK_URL"
-          tar xf immortalwrt-sdk-*.tar.xz
-          rm -f immortalwrt-sdk-*.tar.xz
-          mv immortalwrt-sdk-* sdk
-          echo "SDK_DIR=$(pwd)/sdk" >> "$GITHUB_ENV"
-
-      - name: Copy package into SDK
-        run: |
-          mkdir -p "$SDK_DIR/package/lang"
-          cp -r package/lang/wamr "$SDK_DIR/package/lang/"
-
-      - name: Update feeds
-        working-directory: sdk
-        run: |
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
-
-      - name: Build wamr
-        working-directory: sdk
-        run: |
-          make defconfig
-          make package/lang/wamr/compile V=s -j$(nproc)
-
-      - name: Collect IPK
-        run: |
-          IPK=$(find "$SDK_DIR/bin" -name "wamr_*.ipk" | head -1)
-          if [ -z "$IPK" ]; then
-            echo "ERROR: wamr IPK not found!"
-            find "$SDK_DIR/bin" -name "*.ipk" | head -20
-            exit 1
-          fi
-          cp "$IPK" .
-          ls -lh wamr_*.ipk
-
-      - name: Upload IPK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: wamr-ipk-${{ github.run_number }}
-          path: wamr_*.ipk
           retention-days: 90

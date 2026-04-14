@@ -19,7 +19,7 @@ define Package/wamr
   CATEGORY:=Languages
   TITLE:=WebAssembly Micro Runtime (iwasm)
   URL:=https://github.com/bytecodealliance/wasm-micro-runtime
-  DEPENDS:=+libpthread +libdl +librt
+  DEPENDS:=+libpthread
 endef
 
 define Package/wamr/description
