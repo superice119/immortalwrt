@@ -1,0 +1,25 @@
+diff --git a/core/shared/platform/common/posix/posix_memmap.c b/core/shared/platform/common/posix/posix_memmap.c
+index d5cad88..339aa01 100644
+--- a/core/shared/platform/common/posix/posix_memmap.c
++++ b/core/shared/platform/common/posix/posix_memmap.c
+@@ -290,13 +290,17 @@ void
+ os_dcache_flush(void)
+ {}
+ 
++/*
++ * Flush the instruction cache after writing executable code to memory.
++ * Required on architectures with non-coherent I/D caches (MIPS, ARM, etc.).
++ */
+ void
+ os_icache_flush(void *start, size_t len)
+ {
+ #if defined(__APPLE__) || defined(__MACH__)
+     sys_icache_invalidate(start, len);
+-#else
+-    (void)start;
+-    (void)len;
++#elif defined(__GNUC__) || defined(__clang__)
++    /* GCC/Clang builtin: flushes D-cache and invalidates I-cache */
++    __builtin___clear_cache((char *)start, (char *)start + len);
+ #endif
+ }
