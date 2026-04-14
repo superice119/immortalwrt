@@ -1,0 +1,22 @@
+--- a/core/iwasm/aot/aot_loader.c
++++ b/core/iwasm/aot/aot_loader.c
+@@ -3906,13 +3906,18 @@ load_relocation_section(const uint8 *buf, const uint8 *buf_end,
+     /* Set read only for AOT code and some data sections */
+     map_prot = MMAP_PROT_READ | MMAP_PROT_EXEC;
+ 
+-    if (module->code) {
++    if (module->code && !module->is_indirect_mode) {
+         /* The layout is: literal size + literal + code (with plt table) */
+         uint8 *mmap_addr = module->literal - sizeof(uint32);
+         uint32 total_size =
+             sizeof(uint32) + module->literal_size + module->code_size;
+         os_mprotect(mmap_addr, total_size, map_prot);
+     }
++    /* For XIP (indirect mode), code lives inside the file mmap buffer at a
++       non-page-aligned offset.  Calling mprotect on it would round down to
++       the page boundary and potentially remove write permission from
++       adjacent data allocations, causing SIGSEGV.  The XIP buffer already
++       has the correct RWX permissions from the initial mmap. */
+ 
+     map_prot = MMAP_PROT_READ;
+ 
