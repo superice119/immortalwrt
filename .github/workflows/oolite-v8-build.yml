@@ -102,26 +102,31 @@ jobs:
           CONFIG_PACKAGE_kmod-ath10k-ct=y
           CONFIG_PACKAGE_ath10k-firmware-qca988x-ct=y
           CONFIG_PACKAGE_pciutils=y
+          CONFIG_PACKAGE_libpci=y
+          CONFIG_PACKAGE_pciids=y
+          CONFIG_PACKAGE_kmod=y
+          CONFIG_PACKAGE_libkmod=y
           EOF
-          make defconfig 2>&1 | grep -E "ath10k|pciutils" || true
-          # Download sources for new packages only
+          make defconfig 2>&1 | grep -E "ath10k|pciutils|libpci|pciids|libkmod" || true
+          # Download sources
           make package/kmod-ath10k-ct/download V=s 2>&1 | tail -5
           make package/ath10k-ct-firmware/download V=s 2>&1 | tail -5
           make package/pciutils/download V=s 2>&1 | tail -5
+          make package/kmod/download V=s 2>&1 | tail -5 || true
           # Compile (kernel already built, kmod compile is fast)
           make package/kmod-ath10k-ct/compile V=s -j$(nproc) 2>&1 | tail -20
           make package/ath10k-ct-firmware/compile V=s -j$(nproc) 2>&1 | tail -20
           make package/pciutils/compile V=s -j$(nproc) 2>&1 | tail -20
+          make package/kmod/compile V=s -j$(nproc) 2>&1 | tail -20 || true
 
-      - name: Collect ath10k IPKs
+      - name: Collect extra IPKs
         run: |
           mkdir -p extra-pkgs
-          find openwrt/bin/packages -name "kmod-ath10k-ct_*.ipk" -exec cp {} extra-pkgs/ \;
-          find openwrt/bin/packages -name "ath10k-firmware-qca988x-ct_*.ipk" -exec cp {} extra-pkgs/ \;
-          find openwrt/bin/targets -name "kmod-ath10k-ct_*.ipk" -exec cp {} extra-pkgs/ \;
-          find openwrt/bin/targets -name "ath10k-firmware-qca988x-ct_*.ipk" -exec cp {} extra-pkgs/ \;
-          find openwrt/bin/packages -name "pciutils_*.ipk" -exec cp {} extra-pkgs/ \;
-          find openwrt/bin/targets -name "pciutils_*.ipk" -exec cp {} extra-pkgs/ \;
+          # Search both packages and targets trees
+          for name in kmod-ath10k-ct ath10k-firmware-qca988x-ct \
+                      pciutils libpci pciids kmod libkmod; do
+            find openwrt/bin -name "${name}_*.ipk" -exec cp {} extra-pkgs/ \; 2>/dev/null || true
+          done
           echo "--- Collected packages ---"
           ls -lh extra-pkgs/
 
