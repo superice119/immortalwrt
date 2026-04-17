@@ -93,3 +93,41 @@ jobs:
           name: immortalwrt-oolite-v8-${{ github.run_number }}
           path: firmware/
           retention-days: 30
+
+      - name: Build ath10k + pciutils packages (kernel already compiled)
+        run: |
+          cd openwrt
+          # Append package selections without modifying 004-dot-config
+          cat >> .config << 'EOF'
+          CONFIG_PACKAGE_kmod-ath10k-ct=y
+          CONFIG_PACKAGE_ath10k-firmware-qca988x-ct=y
+          CONFIG_PACKAGE_pciutils=y
+          EOF
+          make defconfig 2>&1 | grep -E "ath10k|pciutils" || true
+          # Download sources for new packages only
+          make package/kmod-ath10k-ct/download V=s 2>&1 | tail -5
+          make package/ath10k-ct-firmware/download V=s 2>&1 | tail -5
+          make package/pciutils/download V=s 2>&1 | tail -5
+          # Compile (kernel already built, kmod compile is fast)
+          make package/kmod-ath10k-ct/compile V=s -j$(nproc) 2>&1 | tail -20
+          make package/ath10k-ct-firmware/compile V=s -j$(nproc) 2>&1 | tail -20
+          make package/pciutils/compile V=s -j$(nproc) 2>&1 | tail -20
+
+      - name: Collect ath10k IPKs
+        run: |
+          mkdir -p extra-pkgs
+          find openwrt/bin/packages -name "kmod-ath10k-ct_*.ipk" -exec cp {} extra-pkgs/ \;
+          find openwrt/bin/packages -name "ath10k-firmware-qca988x-ct_*.ipk" -exec cp {} extra-pkgs/ \;
+          find openwrt/bin/targets -name "kmod-ath10k-ct_*.ipk" -exec cp {} extra-pkgs/ \;
+          find openwrt/bin/targets -name "ath10k-firmware-qca988x-ct_*.ipk" -exec cp {} extra-pkgs/ \;
+          find openwrt/bin/packages -name "pciutils_*.ipk" -exec cp {} extra-pkgs/ \;
+          find openwrt/bin/targets -name "pciutils_*.ipk" -exec cp {} extra-pkgs/ \;
+          echo "--- Collected packages ---"
+          ls -lh extra-pkgs/
+
+      - name: Upload extra packages artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: oolite-v8-extra-pkgs-${{ github.run_number }}
+          path: extra-pkgs/
+          retention-days: 30
