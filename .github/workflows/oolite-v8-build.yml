@@ -97,9 +97,13 @@ jobs:
       - name: Build ath10k + pciutils packages (kernel already compiled)
         run: |
           cd openwrt
-          # Append package selections without modifying 004-dot-config
+          # Full dependency chain for ath10k-ct + pciutils
           cat >> .config << 'EOF'
+          CONFIG_PACKAGE_kmod-mac80211=y
+          CONFIG_PACKAGE_kmod-cfg80211=y
+          CONFIG_PACKAGE_kmod-ath=y
           CONFIG_PACKAGE_kmod-ath10k-ct=y
+          CONFIG_PACKAGE_ath10k-board-qca988x=y
           CONFIG_PACKAGE_ath10k-firmware-qca988x-ct=y
           CONFIG_PACKAGE_pciutils=y
           CONFIG_PACKAGE_libpci=y
@@ -107,14 +111,16 @@ jobs:
           CONFIG_PACKAGE_kmod=y
           CONFIG_PACKAGE_libkmod=y
           EOF
-          make defconfig 2>&1 | grep -E "ath10k|pciutils|libpci|pciids|libkmod" || true
+          make defconfig 2>&1 | grep -E "ath10k|pciutils|mac80211|libkmod" || true
           # Download sources
-          make package/kmod-ath10k-ct/download V=s 2>&1 | tail -5
+          make package/mac80211/download V=s 2>&1 | tail -5
+          make package/ath10k-ct/download V=s 2>&1 | tail -5
           make package/ath10k-ct-firmware/download V=s 2>&1 | tail -5
           make package/pciutils/download V=s 2>&1 | tail -5
           make package/kmod/download V=s 2>&1 | tail -5 || true
-          # Compile (kernel already built, kmod compile is fast)
-          make package/kmod-ath10k-ct/compile V=s -j$(nproc) 2>&1 | tail -20
+          # Compile (kernel already built)
+          make package/mac80211/compile V=s -j$(nproc) 2>&1 | tail -20
+          make package/ath10k-ct/compile V=s -j$(nproc) 2>&1 | tail -20
           make package/ath10k-ct-firmware/compile V=s -j$(nproc) 2>&1 | tail -20
           make package/pciutils/compile V=s -j$(nproc) 2>&1 | tail -20
           make package/kmod/compile V=s -j$(nproc) 2>&1 | tail -20 || true
@@ -122,8 +128,8 @@ jobs:
       - name: Collect extra IPKs
         run: |
           mkdir -p extra-pkgs
-          # Search both packages and targets trees
-          for name in kmod-ath10k-ct ath10k-firmware-qca988x-ct \
+          for name in kmod-mac80211 kmod-cfg80211 kmod-ath \
+                      kmod-ath10k-ct ath10k-board-qca988x ath10k-firmware-qca988x-ct \
                       pciutils libpci pciids kmod libkmod; do
             find openwrt/bin -name "${name}_*.ipk" -exec cp {} extra-pkgs/ \; 2>/dev/null || true
           done
