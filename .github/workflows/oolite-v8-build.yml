@@ -178,7 +178,40 @@ jobs:
           make tools/rust/compile -j$(nproc) 2>&1 | tail -10 || \
             { echo "Parallel failed, retrying single-job..."; \
               make tools/rust/compile -j1 V=s 2>&1 | tail -100; exit 1; }
-          echo "Rust host toolchain ready."
+          echo "Rust host toolchain ready. Version:"
+          staging_dir/host/bin/rustc --version || true
+
+      - name: Upgrade Rust to >=1.88 for forwarder builds
+        run: |
+          # chirpstack_api-4.16.0 + time@0.3.47 require rustc >= 1.88.0
+          # OpenWrt 23.05 tools/rust provides 1.85.0 — upgrade staging_dir binaries
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+            sh -s -- --default-toolchain stable --profile minimal -y --no-modify-path
+          source "$HOME/.cargo/env"
+          RUSTC_VER=$(rustc --version)
+          echo "rustup stable: $RUSTC_VER"
+          # Add mipsel target for cross-compilation
+          rustup target add mipsel-unknown-linux-musl
+          # Replace OpenWrt staging_dir rust binaries
+          RUST_BIN_DIR=$(rustup which rustc | xargs dirname)
+          cp -f "$RUST_BIN_DIR/rustc" openwrt/staging_dir/host/bin/rustc
+          cp -f "$RUST_BIN_DIR/cargo" openwrt/staging_dir/host/bin/cargo
+          # Copy mipsel rust-std (needed for cross-compile target)
+          TOOLCHAIN_DIR=$(rustup show home)/toolchains/$(rustup show active-toolchain | awk '{print $1}')
+          SRC_STD="$TOOLCHAIN_DIR/lib/rustlib/mipsel-unknown-linux-musl"
+          DST_STD="openwrt/staging_dir/host/lib/rustlib/mipsel-unknown-linux-musl"
+          if [ -d "$SRC_STD" ] && [ -d "$DST_STD" ]; then
+            echo "Replacing mipsel rust-std..."
+            cp -rf "$SRC_STD/lib/"* "$DST_STD/lib/"
+          elif [ -d "$SRC_STD" ]; then
+            echo "Copying mipsel rust-std (dst not pre-existing)..."
+            mkdir -p "$DST_STD/lib"
+            cp -rf "$SRC_STD/lib/"* "$DST_STD/lib/"
+          else
+            echo "WARNING: mipsel rust-std not found in rustup toolchain, using existing"
+          fi
+          echo "Final rustc in staging_dir:"
+          openwrt/staging_dir/host/bin/rustc --version
 
       - name: Build libloragw (SX1302 + build deps for concentratord)
         run: |
