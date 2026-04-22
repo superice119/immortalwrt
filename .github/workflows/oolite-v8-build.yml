@@ -56,6 +56,13 @@ jobs:
         run: |
           cd openwrt
           ./scripts/feeds update -a
+          # Patch Rust to 1.88.0 before install (chirpstack_api-4.16.0 requires >=1.88)
+          RUST_MK=feeds/packages/lang/rust/Makefile
+          sed -i 's/PKG_VERSION:=1\.85\.0/PKG_VERSION:=1.88.0/' "$RUST_MK"
+          sed -i 's/rustc-\$(PKG_VERSION)-src\.tar\.gz/rustc-$(PKG_VERSION)-src.tar.xz/' "$RUST_MK"
+          sed -i 's/PKG_HASH:=2f4f3142ffb7c8402139cfa0796e24baaac8b9fd3f96b2deec3b94b4045c6a8a/PKG_HASH:=0c1dcbb4f762513d021e1a282c0ac58c0a423642b3a6bf581cafb5414df4193e/' "$RUST_MK"
+          echo "Rust version after patch:"
+          grep -E "PKG_VERSION|PKG_SOURCE|PKG_HASH" "$RUST_MK"
           ./scripts/feeds install -a
 
       - name: Configure build
@@ -172,46 +179,29 @@ jobs:
           EOF
           make defconfig 2>&1 | grep -E "chirpstack|libloragw" || true
 
-      - name: Build Rust host toolchain
+      - name: Free disk space before Rust build
+        run: |
+          df -h
+          # Remove build artifacts that are no longer needed
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc || true
+          rm -rf openwrt/build_dir/target-mipsel_24kc_musl/root-ramips || true
+          df -h
+
+      - name: Download Rust 1.88.0 source
         run: |
           cd openwrt
-          make tools/rust/compile -j$(nproc) 2>&1 | tail -10 || \
-            { echo "Parallel failed, retrying single-job..."; \
-              make tools/rust/compile -j1 V=s 2>&1 | tail -100; exit 1; }
-          echo "Rust host toolchain ready. Version:"
-          staging_dir/host/bin/rustc --version || true
+          make package/feeds/packages/rust/download V=s 2>&1 | tail -20
 
-      - name: Upgrade Rust to >=1.88 for forwarder builds
+      - name: Build Rust host toolchain (1.88.0, from source)
         run: |
-          # chirpstack_api-4.16.0 + time@0.3.47 require rustc >= 1.88.0
-          # OpenWrt 23.05 tools/rust provides 1.85.0 — upgrade staging_dir binaries
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
-            sh -s -- --default-toolchain stable --profile minimal -y --no-modify-path
-          source "$HOME/.cargo/env"
-          RUSTC_VER=$(rustc --version)
-          echo "rustup stable: $RUSTC_VER"
-          # Add mipsel target for cross-compilation
-          rustup target add mipsel-unknown-linux-musl
-          # Replace OpenWrt staging_dir rust binaries
-          RUST_BIN_DIR=$(rustup which rustc | xargs dirname)
-          cp -f "$RUST_BIN_DIR/rustc" openwrt/staging_dir/host/bin/rustc
-          cp -f "$RUST_BIN_DIR/cargo" openwrt/staging_dir/host/bin/cargo
-          # Copy mipsel rust-std (needed for cross-compile target)
-          TOOLCHAIN_DIR=$(rustup show home)/toolchains/$(rustup show active-toolchain | awk '{print $1}')
-          SRC_STD="$TOOLCHAIN_DIR/lib/rustlib/mipsel-unknown-linux-musl"
-          DST_STD="openwrt/staging_dir/host/lib/rustlib/mipsel-unknown-linux-musl"
-          if [ -d "$SRC_STD" ] && [ -d "$DST_STD" ]; then
-            echo "Replacing mipsel rust-std..."
-            cp -rf "$SRC_STD/lib/"* "$DST_STD/lib/"
-          elif [ -d "$SRC_STD" ]; then
-            echo "Copying mipsel rust-std (dst not pre-existing)..."
-            mkdir -p "$DST_STD/lib"
-            cp -rf "$SRC_STD/lib/"* "$DST_STD/lib/"
-          else
-            echo "WARNING: mipsel rust-std not found in rustup toolchain, using existing"
-          fi
-          echo "Final rustc in staging_dir:"
-          openwrt/staging_dir/host/bin/rustc --version
+          cd openwrt
+          make package/feeds/packages/rust/compile \
+            -j$(nproc) V=s 2>&1 | tail -20 || \
+            { echo "Parallel failed, retrying single-job..."; \
+              make package/feeds/packages/rust/compile \
+              -j1 V=s 2>&1 | tail -300; exit 1; }
+          echo "Rust host toolchain ready:"
+          staging_dir/host/bin/rustc --version || true
 
       - name: Build libloragw (SX1302 + build deps for concentratord)
         run: |
