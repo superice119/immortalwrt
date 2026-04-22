@@ -63,6 +63,13 @@ jobs:
           sed -i 's/PKG_HASH:=2f4f3142ffb7c8402139cfa0796e24baaac8b9fd3f96b2deec3b94b4045c6a8a/PKG_HASH:=0c1dcbb4f762513d021e1a282c0ac58c0a423642b3a6bf581cafb5414df4193e/' "$RUST_MK"
           echo "Rust version after patch:"
           grep -E "PKG_VERSION|PKG_SOURCE|PKG_HASH" "$RUST_MK"
+          # Remove patches that have context mismatches in 1.88.0:
+          # 0001: sysinfo version changed 0.33.0→0.35.0; 0003: libc Cargo.lock checksums differ
+          # On Ubuntu CI, liblzma is available as .so, so static xz2 patch is not needed.
+          rm -f feeds/packages/lang/rust/patches/0001-Update-xz2-and-use-it-static.patch
+          rm -f feeds/packages/lang/rust/patches/0003-bump-libc-deps-to-0.2.146.patch
+          echo "Rust patches after cleanup:"
+          ls feeds/packages/lang/rust/patches/ 2>/dev/null || echo "(none)"
           ./scripts/feeds install -a
 
       - name: Configure build
@@ -190,57 +197,67 @@ jobs:
       - name: Download Rust 1.88.0 source
         run: |
           cd openwrt
-          make package/feeds/packages/rust/download V=s 2>&1 | tail -20
+          make package/feeds/packages/rust/download V=s
 
       - name: Build Rust host toolchain (1.88.0, from source)
         run: |
           cd openwrt
-          make package/feeds/packages/rust/compile \
-            -j$(nproc) V=s 2>&1 | tail -20 || \
-            { echo "Parallel failed, retrying single-job..."; \
-              make package/feeds/packages/rust/compile \
-              -j1 V=s 2>&1 | tail -300; exit 1; }
+          make package/feeds/packages/rust/compile -j$(nproc) V=s \
+            > /tmp/rust-build.log 2>&1
+          rc=$?; tail -30 /tmp/rust-build.log
+          if [ $rc -ne 0 ]; then
+            echo "Parallel build failed (exit $rc), retrying single-job..."
+            make package/feeds/packages/rust/compile -j1 V=s 2>&1 | tail -300
+            exit 1
+          fi
           echo "Rust host toolchain ready:"
-          staging_dir/host/bin/rustc --version || true
+          staging_dir/host/bin/rustc --version
 
       - name: Build libloragw (SX1302 + build deps for concentratord)
         run: |
           cd openwrt
-          # SX1302 - our target (has ramips-specific patch)
           make package/feeds/chirpstack/libloragw-sx1302/compile \
-            -j$(nproc) V=s 2>&1 | tail -30 || \
-            make package/feeds/chirpstack/libloragw-sx1302/compile \
-            -j1 V=s 2>&1 | tail -100
-          # SX1301 and 2g4 are required as build deps by chirpstack-concentratord
-          make package/feeds/chirpstack/libloragw-sx1301/compile \
-            -j$(nproc) V=s 2>&1 | tail -20 || true
-          make package/feeds/chirpstack/libloragw-2g4/compile \
-            -j$(nproc) V=s 2>&1 | tail -20 || true
+            -j$(nproc) V=s > /tmp/libloragw.log 2>&1
+          rc=$?; tail -30 /tmp/libloragw.log
+          [ $rc -eq 0 ] || { make package/feeds/chirpstack/libloragw-sx1302/compile \
+            -j1 V=s 2>&1 | tail -100; exit 1; }
+          # SX1301 and 2g4 are optional concentratord build deps - ignore failures
+          make package/feeds/chirpstack/libloragw-sx1301/compile -j$(nproc) V=s \
+            > /dev/null 2>&1 || true
+          make package/feeds/chirpstack/libloragw-2g4/compile -j$(nproc) V=s \
+            > /dev/null 2>&1 || true
 
       - name: Build chirpstack-concentratord (Rust, mipsel_24kc, SX1302)
         run: |
           cd openwrt
           make package/feeds/chirpstack/chirpstack-concentratord/compile \
-            -j$(nproc) V=s 2>&1 | tail -50 || \
-            { echo "Parallel failed, retrying single-job..."; \
-              make package/feeds/chirpstack/chirpstack-concentratord/compile \
-              -j1 V=s 2>&1 | tail -200; exit 1; }
+            -j$(nproc) V=s > /tmp/concentratord.log 2>&1
+          rc=$?; tail -50 /tmp/concentratord.log
+          if [ $rc -ne 0 ]; then
+            echo "Parallel build failed (exit $rc), retrying single-job..."
+            make package/feeds/chirpstack/chirpstack-concentratord/compile \
+              -j1 V=s 2>&1 | tail -200
+            exit 1
+          fi
 
       - name: Build ChirpStack forwarders (MQTT + UDP, Rust)
         run: |
           cd openwrt
-          make package/feeds/chirpstack/chirpstack-mqtt-forwarder/compile \
-            -j$(nproc) V=s 2>&1 | tail -30 || \
-            make package/feeds/chirpstack/chirpstack-mqtt-forwarder/compile \
-            -j1 V=s 2>&1 | tail -150
-          make package/feeds/chirpstack/chirpstack-mqtt-forwarder-single/compile \
-            -j$(nproc) V=s 2>&1 | tail -10
-          make package/feeds/chirpstack/chirpstack-udp-forwarder/compile \
-            -j$(nproc) V=s 2>&1 | tail -30 || \
-            make package/feeds/chirpstack/chirpstack-udp-forwarder/compile \
-            -j1 V=s 2>&1 | tail -150
-          make package/feeds/chirpstack/chirpstack-udp-forwarder-single/compile \
-            -j$(nproc) V=s 2>&1 | tail -10
+          for pkg in \
+            chirpstack-mqtt-forwarder \
+            chirpstack-mqtt-forwarder-single \
+            chirpstack-udp-forwarder \
+            chirpstack-udp-forwarder-single; do
+            echo "=== Building $pkg ==="
+            make package/feeds/chirpstack/$pkg/compile \
+              -j$(nproc) V=s > /tmp/${pkg}.log 2>&1
+            rc=$?; tail -30 /tmp/${pkg}.log
+            if [ $rc -ne 0 ]; then
+              echo "Parallel failed (exit $rc), retrying single-job..."
+              make package/feeds/chirpstack/$pkg/compile -j1 V=s 2>&1 | tail -150
+              exit 1
+            fi
+          done
 
       - name: Collect ChirpStack IPKs
         run: |
