@@ -39,6 +39,21 @@ CONFIG_PACKAGE_uqmi=y
 CONFIG_PACKAGE_usb-modeswitch=y
 CONFIG_PACKAGE_kmod-mii=y
 
+# WiFi - QCA9880/9882/9886/9888 PCIe (ath10k-ct)
+CONFIG_PACKAGE_kmod-cfg80211=y
+CONFIG_PACKAGE_kmod-mac80211=y
+CONFIG_PACKAGE_kmod-ath=y
+CONFIG_PACKAGE_kmod-ath10k-ct=y
+CONFIG_PACKAGE_kmod-hwmon-core=y
+CONFIG_PACKAGE_ath10k-firmware-qca9880-ct=y
+CONFIG_PACKAGE_ath10k-firmware-qca988x-ct=y
+CONFIG_PACKAGE_wireless-regdb=y
+CONFIG_PACKAGE_iw=y
+CONFIG_PACKAGE_iwinfo=y
+CONFIG_PACKAGE_hostapd-common=y
+CONFIG_PACKAGE_wpad-basic-mbedtls=y
+CONFIG_PACKAGE_luci-app-wireless=y
+
 CONFIG_IMAGEOPT=y
 CONFIG_VERSIONOPT=y
 CONFIG_VERSION_PRODUCT="Oolite-V8.X"
