@@ -6,7 +6,7 @@ on:
     branches: [ openwrt-24.10 ]
     paths:
       - '.github/workflows/wifi-ipk.yml'
-      - '.github/patches/004-dot-config'
+      - '.github/patches/**'
 
 jobs:
   build-wifi-pkgs:
