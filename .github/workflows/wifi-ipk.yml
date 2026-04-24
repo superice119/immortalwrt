@@ -55,17 +55,14 @@ jobs:
       - name: Configure build (packages only)
         run: |
           cd openwrt
-          # Apply base config
           cat ../.github/patches/004-dot-config > .config
-          # Add WiFi packages
-          cat >> .config <<'EOF'
-CONFIG_PACKAGE_kmod-ath10k-ct=y
-CONFIG_PACKAGE_kmod-mac80211=y
-CONFIG_PACKAGE_kmod-cfg80211=y
-CONFIG_PACKAGE_kmod-ath=y
-CONFIG_PACKAGE_ath10k-firmware-qca988x-ct=y
-CONFIG_PACKAGE_ath10k-board-qca988x=y
-EOF
+          printf '%s\n' \
+            'CONFIG_PACKAGE_kmod-ath10k-ct=y' \
+            'CONFIG_PACKAGE_kmod-mac80211=y' \
+            'CONFIG_PACKAGE_kmod-cfg80211=y' \
+            'CONFIG_PACKAGE_kmod-ath=y' \
+            'CONFIG_PACKAGE_ath10k-firmware-qca988x-ct=y' \
+            'CONFIG_PACKAGE_ath10k-board-qca988x=y' >> .config
           make defconfig
 
       # Cache toolchain to speed up future runs
