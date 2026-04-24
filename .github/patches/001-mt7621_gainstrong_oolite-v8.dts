@@ -140,6 +140,11 @@
 	};
 };
 
+/* GMAC1 unused; remove rgmii2 from ethernet pinctrl to free those pins as GPIO */
+&ethernet {
+	pinctrl-0 = <&mdio_pins>, <&rgmii1_pins>;
+};
+
 &gmac1 {
 	status = "disabled";
 };
