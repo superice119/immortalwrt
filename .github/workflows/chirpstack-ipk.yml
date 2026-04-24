@@ -45,14 +45,14 @@ jobs:
             sdk/build_dir/target-mipsel_24kc_musl/host/rustc-1.90.0-src/.prepared
             sdk/build_dir/target-mipsel_24kc_musl/host/rustc-1.90.0-src/.configured
             sdk/build_dir/target-mipsel_24kc_musl/host/rustc-1.90.0-src/.built
-          key: sdk-24.10-rust-1.90.0-${{ runner.os }}-v1
+          key: sdk-rust-1.90.0-${{ runner.os }}-v2
 
       - name: Cache downloaded sources (Rust tarball ~170MB + cargo registry)
         uses: actions/cache@v4
         with:
           path: sdk/dl
-          key: sdk-24.10-dl-rust-1.90.0-v1
-          restore-keys: sdk-24.10-dl-
+          key: sdk-dl-rust-1.90.0-v2
+          restore-keys: sdk-dl-
 
       - name: Update feeds and fix musl-root
         run: |
