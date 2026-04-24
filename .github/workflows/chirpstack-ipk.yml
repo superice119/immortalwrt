@@ -35,19 +35,23 @@ jobs:
           mv immortalwrt-sdk-* sdk
           echo "SDK ready. Toolchains: $(ls sdk/staging_dir/)"
 
-      # Cache Rust host toolchain: first build takes ~90 min, subsequent runs ~0 min
+      # Cache Rust host toolchain + build stamps: first build ~90 min, subsequent ~0 min
       - name: Restore Rust host toolchain cache
         id: cache-rust
         uses: actions/cache@v4
         with:
-          path: sdk/staging_dir/host
-          key: sdk-rust-1.90.0-${{ runner.os }}-v1
+          path: |
+            sdk/staging_dir/host
+            sdk/build_dir/target-mipsel_24kc_musl/host/rustc-1.90.0-src/.prepared
+            sdk/build_dir/target-mipsel_24kc_musl/host/rustc-1.90.0-src/.configured
+            sdk/build_dir/target-mipsel_24kc_musl/host/rustc-1.90.0-src/.built
+          key: sdk-rust-1.90.0-${{ runner.os }}-v2
 
-      - name: Cache downloaded sources (Rust tarball ~170MB)
+      - name: Cache downloaded sources (Rust tarball ~170MB + cargo registry)
         uses: actions/cache@v4
         with:
           path: sdk/dl
-          key: sdk-dl-rust-1.90.0-v1
+          key: sdk-dl-rust-1.90.0-v2
           restore-keys: sdk-dl-
 
       - name: Update feeds + replace Rust Makefile with openwrt-24.10 version
@@ -97,6 +101,62 @@ jobs:
         run: |
           cd sdk
           make download -j4 2>&1 | grep -E "Download|ERROR|error" | tail -30
+
+      # When Rust host cache hits, create fake .built stamps so make skips recompilation.
+      # Without this, make sees missing build_dir stamps and tries to rebuild every time.
+      - name: Create Rust build stamps (cache hit — skip 90-min recompile)
+        if: steps.cache-rust.outputs.cache-hit == 'true'
+        run: |
+          STAMP_DIR="sdk/build_dir/target-mipsel_24kc_musl/host/rustc-1.90.0-src"
+          mkdir -p "$STAMP_DIR"
+          touch "$STAMP_DIR/.prepared" "$STAMP_DIR/.configured" "$STAMP_DIR/.built"
+          echo "Rust build stamps created — compile will be skipped"
+
+      # When Rust host cache misses, extract the source and fix vendor checksums.
+      # Rust 1.90.0 tarball's .cargo-checksum.json references Cargo.toml.orig for some
+      # vendored crates (e.g. serde-1.0.215), but the file is absent in the tarball.
+      # Bootstrap cargo validates all checksum entries and fails immediately on missing files.
+      # Fix: extract source, then remove missing-file entries from all .cargo-checksum.json.
+      - name: Prepare Rust source and fix vendor checksums (cache miss only)
+        if: steps.cache-rust.outputs.cache-hit != 'true'
+        working-directory: sdk
+        run: |
+          set -e
+          echo "=== Extracting Rust 1.90.0 source (make host/prepare) ==="
+          make package/feeds/packages/rust/host/prepare V=s 2>&1 | tail -10
+          RUST_SRC=$(find build_dir -maxdepth 5 -name "rustc-1.90.0-src" -type d 2>/dev/null | head -1)
+          echo "Rust source: $RUST_SRC"
+          if [ -z "$RUST_SRC" ]; then
+            echo "ERROR: Rust source directory not found after prepare"
+            exit 1
+          fi
+          echo "=== Fixing vendor checksums (removing missing .orig entries) ==="
+          python3 - "$RUST_SRC" << 'PYEOF'
+          import json, os, sys, glob
+          rust_src = sys.argv[1]
+          vendor_dir = os.path.join(rust_src, "vendor")
+          if not os.path.isdir(vendor_dir):
+              print("No vendor directory found — skipping")
+              sys.exit(0)
+          fixed_total = 0
+          for checksum_file in sorted(glob.glob(os.path.join(vendor_dir, "*", ".cargo-checksum.json"))):
+              with open(checksum_file) as f:
+                  data = json.load(f)
+              missing = []
+              for fname in list(data.get("files", {}).keys()):
+                  full = os.path.join(os.path.dirname(checksum_file), fname)
+                  if not os.path.exists(full):
+                      missing.append(fname)
+              if missing:
+                  for fname in missing:
+                      del data["files"][fname]
+                  with open(checksum_file, "w") as f:
+                      json.dump(data, f)
+                  crate = os.path.basename(os.path.dirname(checksum_file))
+                  print(f"  {crate}: removed {missing}")
+                  fixed_total += len(missing)
+          print(f"Fixed {fixed_total} missing checksum entries across vendor/")
+          PYEOF
 
       - name: Build libloragw-sx1302
         run: |
