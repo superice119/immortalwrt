@@ -18,9 +18,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: openwrt-24.10
-          sparse-checkout: |
-            .github/patches
-            .github/workflows
+          path: meta
 
       - name: Install dependencies
         run: |
@@ -30,21 +28,21 @@ jobs:
             libncurses-dev libssl-dev python3-distutils rsync unzip zlib1g-dev \
             file wget curl zstd
 
-      - name: Clone ImmortalWrt openwrt-24.10
+      # Clone upstream ImmortalWrt -- SAME source as the firmware build workflow
+      # to guarantee identical kernel hash / vermagic
+      - name: Clone ImmortalWrt openwrt-24.10 (upstream)
         run: |
-          git clone --depth 1 \
-            https://github.com/superice119/immortalwrt.git \
-            -b openwrt-24.10 openwrt
-          echo "HEAD: $(git -C openwrt rev-parse --short HEAD)"
+          git clone --depth=1 -b openwrt-24.10 \
+            https://github.com/immortalwrt/immortalwrt.git openwrt
+          echo "ImmortalWrt: $(git -C openwrt rev-parse --short HEAD)"
 
       - name: Apply DTS and patches
         run: |
-          cp .github/patches/001-mt7621_gainstrong_oolite-v8.dts \
+          cp meta/.github/patches/001-mt7621_gainstrong_oolite-v8.dts \
             openwrt/target/linux/ramips/dts/mt7621_gainstrong_oolite-v8.dts
-          python3 .github/patches/002-patch-mt7621-mk.py \
-            openwrt/target/linux/ramips/image/mt7621.mk
-          cp .github/patches/003-spi-nor-restore-4byte.patch \
-            openwrt/target/linux/ramips/patches-6.6/ 2>/dev/null || true
+          cd openwrt
+          python3 ../meta/.github/patches/002-patch-mt7621-mk.py
+          echo "Patches applied."
 
       - name: Update feeds
         run: |
@@ -54,8 +52,8 @@ jobs:
 
       - name: Configure build (packages only)
         run: |
+          cp meta/.github/patches/004-dot-config openwrt/.config
           cd openwrt
-          cat ../.github/patches/004-dot-config > .config
           printf '%s\n' \
             'CONFIG_PACKAGE_kmod-ath10k-ct=y' \
             'CONFIG_PACKAGE_kmod-mac80211=y' \
@@ -75,8 +73,8 @@ jobs:
             openwrt/staging_dir/host
             openwrt/build_dir/host
             openwrt/build_dir/toolchain-mipsel_24kc_gcc-13.3.0_musl
-          key: toolchain-24.10-mt7621-${{ hashFiles('openwrt/toolchain/**', 'openwrt/include/toolchain*.mk') }}
-          restore-keys: toolchain-24.10-mt7621-
+          key: wifi-toolchain-24.10-mt7621-${{ hashFiles('openwrt/toolchain/**', 'openwrt/include/toolchain*.mk') }}
+          restore-keys: wifi-toolchain-24.10-mt7621-
 
       - name: Build toolchain (if not cached)
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
@@ -92,8 +90,8 @@ jobs:
         with:
           path: |
             openwrt/build_dir/target-mipsel_24kc_musl/linux-ramips_mt7621/linux-6.6.*
-          key: kernel-24.10-mt7621-${{ hashFiles('openwrt/target/linux/ramips/**', 'openwrt/target/linux/generic/**') }}
-          restore-keys: kernel-24.10-mt7621-
+          key: wifi-kernel-24.10-mt7621-${{ hashFiles('openwrt/target/linux/ramips/**', 'openwrt/target/linux/generic/**') }}
+          restore-keys: wifi-kernel-24.10-mt7621-
 
       - name: Build kernel (for Module.symvers)
         if: steps.cache-kernel.outputs.cache-hit != 'true'
@@ -105,16 +103,12 @@ jobs:
       - name: Build ath10k packages
         run: |
           cd openwrt
-          # Build mac80211 stack (ath10k dependency)
           make -j$(nproc) package/kernel/mac80211/compile \
             BUILD_LOG=1 2>&1 | tail -20
-          # Build ath10k-ct kmod
           make -j$(nproc) package/kernel/ath10k-ct/compile \
             BUILD_LOG=1 V=sc 2>&1 | tail -20
-          # Build firmware
           make -j$(nproc) package/firmware/ath10k-ct-firmware/compile \
             BUILD_LOG=1 2>&1 | tail -20
-          # Build IPKs
           make -j$(nproc) package/kernel/ath10k-ct/install \
             package/firmware/ath10k-ct-firmware/install \
             BUILD_LOG=1 2>&1 | tail -10 || true
