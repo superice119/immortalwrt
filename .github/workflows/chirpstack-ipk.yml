@@ -70,6 +70,44 @@ jobs:
             https://raw.githubusercontent.com/openwrt/packages/openwrt-24.10/lang/rust/patches/0001-Update-xz2-and-use-it-static.patch
           echo "Rust patches:"
           ls feeds/packages/lang/rust/patches/
+          # Fix musl-root: TOOLCHAIN_ROOT_DIR is empty in 23.05 SDK (different naming convention).
+          # Rust bootstrap sanity check requires musl-root/lib/libc.a to exist.
+          # Detect actual toolchain directory and hardcode the path into the Makefile.
+          python3 << 'PYEOF'
+          import os, glob, sys
+          staging = 'staging_dir'
+          dirs = sorted(glob.glob(os.path.join(staging, 'toolchain-*')))
+          if not dirs:
+              print("ERROR: no toolchain-* directory found in staging_dir")
+              sys.exit(1)
+          toolchain = os.path.join(os.getcwd(), dirs[0])
+          libc_a = os.path.join(toolchain, 'lib', 'libc.a')
+          print(f"Toolchain: {toolchain}")
+          print(f"libc.a exists: {os.path.exists(libc_a)}")
+          if not os.path.exists(libc_a):
+              # Look harder
+              found = glob.glob(os.path.join(toolchain, '**/libc.a'), recursive=True)
+              if found:
+                  toolchain = os.path.dirname(os.path.dirname(found[0]))
+                  print(f"Found libc.a, adjusted musl-root to: {toolchain}")
+              else:
+                  print("WARNING: libc.a not found, proceeding anyway")
+          with open('feeds/packages/lang/rust/Makefile') as f:
+              content = f.read()
+          # Replace conditional musl-root (may be empty in 23.05 SDK) with hardcoded path
+          old = '$(if $(CONFIG_USE_MUSL),--set=target.$(RUSTC_TARGET_ARCH).musl-root=$(TOOLCHAIN_ROOT_DIR))'
+          new = '--set=target.$(RUSTC_TARGET_ARCH).musl-root=' + toolchain
+          if old in content:
+              content = content.replace(old, new)
+              with open('feeds/packages/lang/rust/Makefile', 'w') as f:
+                  f.write(content)
+              print(f"Fixed musl-root -> {toolchain}")
+          else:
+              print(f"WARNING: pattern not found; current musl-root lines:")
+              for line in content.splitlines():
+                  if 'musl-root' in line or 'TOOLCHAIN_ROOT' in line:
+                      print(f"  {line}")
+          PYEOF
           ./scripts/feeds install -a
 
       - name: Add ChirpStack feed
