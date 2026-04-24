@@ -1,0 +1,94 @@
+name: Build ImmortalWrt for GainStrong Oolite V8 (24.10)
+
+on:
+  push:
+    branches: [ openwrt-24.10 ]
+    paths:
+      - '.github/workflows/oolite-v8-24.10-build.yml'
+      - '.github/patches/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build ImmortalWrt (ramips/mt7621 Oolite V8, kernel 6.6)
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repo (patches)
+        uses: actions/checkout@v4
+        with:
+          ref: openwrt-24.10
+          path: meta
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            build-essential clang flex bison g++ gawk gcc-multilib \
+            g++-multilib gettext git libncurses-dev libssl-dev \
+            python3-distutils python3-pyelftools rsync unzip \
+            zlib1g-dev file wget
+
+      - name: Clone ImmortalWrt openwrt-24.10
+        run: |
+          git clone --depth=1 -b openwrt-24.10 \
+            https://github.com/immortalwrt/immortalwrt.git openwrt
+          echo "ImmortalWrt: $(git -C openwrt rev-parse --short HEAD)"
+
+      - name: Apply DTS for Oolite V8
+        run: |
+          cp meta/.github/patches/001-mt7621_gainstrong_oolite-v8.dts \
+             openwrt/target/linux/ramips/dts/mt7621_gainstrong_oolite-v8.dts
+          echo "DTS installed."
+
+      - name: Patch mt7621.mk - Add Oolite V8 device entry
+        run: |
+          cd openwrt
+          python3 ../meta/.github/patches/002-patch-mt7621-mk.py
+          grep -A8 "gainstrong_oolite-v8" target/linux/ramips/image/mt7621.mk | head -10
+
+      # Note: No SPI-NOR kernel patch needed for kernel 6.6.
+      # The DTS includes 'broken-flash-reset' which sets SNOR_F_BROKEN_RESET,
+      # causing spi_nor_restore() to exit 4-byte mode on reboot automatically.
+
+      - name: Update feeds
+        run: |
+          cd openwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Configure build
+        run: |
+          cp meta/.github/patches/004-dot-config openwrt/.config
+          cd openwrt
+          make defconfig 2>&1 | tail -5
+          echo "Target:"
+          grep "DEVICE_gainstrong" .config
+
+      - name: Download packages
+        run: |
+          cd openwrt
+          make download -j8
+          find dl -size -1024c -delete
+
+      - name: Build firmware
+        run: |
+          cd openwrt
+          if ! make -j$(nproc); then
+            echo "Parallel build failed, retrying with verbose single-job..."
+            make -j1 V=s 2>&1 | tail -200
+            exit 1
+          fi
+
+      - name: Collect firmware
+        run: |
+          mkdir -p firmware
+          find openwrt/bin/targets/ramips/mt7621/ -name "*.bin" -exec cp {} firmware/ \;
+          ls -lh firmware/
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: immortalwrt-oolite-v8-24.10-${{ github.run_number }}
+          path: firmware/
+          retention-days: 30
