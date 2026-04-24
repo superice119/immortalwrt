@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import pathlib, sys
 
-mk = pathlib.Path("target/linux/ramips/image/mt7621.mk")
+mk = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "target/linux/ramips/image/mt7621.mk")
 text = mk.read_text()
 
 entry = (
