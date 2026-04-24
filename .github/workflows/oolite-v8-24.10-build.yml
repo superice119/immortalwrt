@@ -64,6 +64,9 @@ jobs:
           make defconfig 2>&1 | tail -5
           echo "Target:"
           grep "DEVICE_gainstrong" .config
+          # Disable PCIe power saving for ath10k stability on kernel 6.6
+          mkdir -p files/etc/modules.d
+          echo "options ath10k_pci pci_ps=0" > files/etc/modules.d/ath10k_pci
 
       - name: Download packages
         run: |
