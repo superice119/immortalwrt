@@ -1,0 +1,166 @@
+name: Build ChirpStack IPKs (SDK, mipsel_24kc)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ openwrt-23.05 ]
+    paths:
+      - '.github/workflows/chirpstack-ipk.yml'
+
+jobs:
+  build-chirpstack:
+    name: Build ChirpStack IPKs (Rust 1.90, mipsel_24kc)
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          ref: openwrt-23.05
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            build-essential clang flex bison g++ gawk gcc-multilib \
+            g++-multilib gettext git libncurses-dev libssl-dev \
+            python3-distutils rsync unzip zlib1g-dev file wget curl
+
+      - name: Download ImmortalWrt SDK (ramips/mt7621)
+        run: |
+          SDK_URL="https://downloads.immortalwrt.org/releases/23.05-SNAPSHOT/targets/ramips/mt7621/immortalwrt-sdk-23.05-SNAPSHOT-ramips-mt7621_gcc-12.3.0_musl.Linux-x86_64.tar.xz"
+          wget -q --show-progress "$SDK_URL"
+          tar xf immortalwrt-sdk-*.tar.xz
+          rm -f immortalwrt-sdk-*.tar.xz
+          mv immortalwrt-sdk-* sdk
+          echo "SDK ready. Toolchains: $(ls sdk/staging_dir/)"
+
+      # Cache Rust host toolchain: first build takes ~90 min, subsequent runs ~0 min
+      - name: Restore Rust host toolchain cache
+        id: cache-rust
+        uses: actions/cache@v4
+        with:
+          path: sdk/staging_dir/host
+          key: sdk-rust-1.90.0-${{ runner.os }}-v1
+
+      - name: Cache downloaded sources (Rust tarball ~170MB)
+        uses: actions/cache@v4
+        with:
+          path: sdk/dl
+          key: sdk-dl-rust-1.90.0-v1
+          restore-keys: sdk-dl-
+
+      - name: Update feeds + patch Rust to 1.90.0
+        run: |
+          cd sdk
+          ./scripts/feeds update -a
+          RUST_MK=feeds/packages/lang/rust/Makefile
+          sed -i 's/PKG_VERSION:=1\.85\.0/PKG_VERSION:=1.90.0/' "$RUST_MK"
+          sed -i 's|rustc-\$(PKG_VERSION)-src\.tar\.gz|rustc-$(PKG_VERSION)-src.tar.xz|' "$RUST_MK"
+          sed -i 's|PKG_HASH:=.*|PKG_HASH:=6bfeaddd90ffda2f063492b092bfed925c4b8c701579baf4b1316e021470daac|' "$RUST_MK"
+          # Replace 0001 patch with openwrt-24.10 version (sysinfo "0.36.0" matches 1.90.0)
+          rm -f feeds/packages/lang/rust/patches/0001-*.patch
+          rm -f feeds/packages/lang/rust/patches/0003-*.patch
+          curl -fsSL -o feeds/packages/lang/rust/patches/0001-Update-xz2-and-use-it-static.patch \
+            https://raw.githubusercontent.com/openwrt/packages/openwrt-24.10/lang/rust/patches/0001-Update-xz2-and-use-it-static.patch
+          echo "Rust patched:"
+          grep -E "PKG_VERSION|PKG_SOURCE:|PKG_HASH" "$RUST_MK"
+          echo "Rust patches:"
+          ls feeds/packages/lang/rust/patches/
+          ./scripts/feeds install -a
+
+      - name: Add ChirpStack feed
+        run: |
+          cd sdk
+          echo "src-git chirpstack https://github.com/chirpstack/chirpstack-openwrt-feed.git" \
+            >> feeds.conf.default
+          ./scripts/feeds update chirpstack
+          ./scripts/feeds install -a -p chirpstack
+          echo "ChirpStack packages available:"
+          ls package/feeds/chirpstack/ 2>/dev/null | head -20
+
+      - name: Configure ChirpStack packages (SX1302/USB-915)
+        run: |
+          cd sdk
+          cat > .config << 'EOF'
+          CONFIG_PACKAGE_libloragw-sx1302=y
+          CONFIG_PACKAGE_libloragw-sx1302-utils=y
+          CONFIG_PACKAGE_chirpstack-concentratord=y
+          CONFIG_PACKAGE_chirpstack-concentratord-sx1302=y
+          CONFIG_PACKAGE_chirpstack-mqtt-forwarder=y
+          CONFIG_PACKAGE_chirpstack-mqtt-forwarder-single=y
+          CONFIG_PACKAGE_chirpstack-udp-forwarder=y
+          CONFIG_PACKAGE_chirpstack-udp-forwarder-single=y
+          EOF
+          make defconfig 2>&1 | grep -E "chirpstack|libloragw" || true
+
+      - name: Download sources
+        run: |
+          cd sdk
+          make download -j4 2>&1 | grep -E "Download|ERROR|error" | tail -30
+
+      - name: Build libloragw-sx1302
+        run: |
+          cd sdk
+          make package/feeds/chirpstack/libloragw-sx1302/compile \
+            -j$(nproc) V=s > /tmp/libloragw.log 2>&1
+          rc=$?; tail -20 /tmp/libloragw.log
+          [ $rc -eq 0 ] || { tail -100 /tmp/libloragw.log; exit 1; }
+          # Optional deps for concentratord (ignore failures)
+          make package/feeds/chirpstack/libloragw-sx1301/compile \
+            -j$(nproc) V=s > /dev/null 2>&1 || true
+          make package/feeds/chirpstack/libloragw-2g4/compile \
+            -j$(nproc) V=s > /dev/null 2>&1 || true
+
+      - name: Build chirpstack-concentratord (Rust cross-compile ~90 min first time)
+        shell: bash
+        run: |
+          set +e
+          cd sdk
+          echo "Cache hit for Rust host: ${{ steps.cache-rust.outputs.cache-hit }}"
+          make package/feeds/chirpstack/chirpstack-concentratord/compile \
+            -j$(nproc) V=s > /tmp/concentratord.log 2>&1
+          rc=$?
+          tail -100 /tmp/concentratord.log
+          if [ $rc -ne 0 ]; then
+            echo "::error::concentratord parallel build failed (exit $rc), retrying single-job..."
+            make package/feeds/chirpstack/chirpstack-concentratord/compile \
+              -j1 V=s 2>&1 | tail -300
+            exit 1
+          fi
+
+      - name: Build ChirpStack forwarders (MQTT + UDP)
+        shell: bash
+        run: |
+          set +e
+          cd sdk
+          for pkg in \
+            chirpstack-mqtt-forwarder \
+            chirpstack-mqtt-forwarder-single \
+            chirpstack-udp-forwarder \
+            chirpstack-udp-forwarder-single; do
+            echo "=== Building $pkg ==="
+            make package/feeds/chirpstack/$pkg/compile \
+              -j$(nproc) V=s > /tmp/${pkg}.log 2>&1
+            rc=$?; tail -50 /tmp/${pkg}.log
+            if [ $rc -ne 0 ]; then
+              echo "::error::$pkg parallel build failed (exit $rc), retrying..."
+              make package/feeds/chirpstack/$pkg/compile -j1 V=s 2>&1 | tail -200
+              exit 1
+            fi
+          done
+
+      - name: Collect ChirpStack IPKs
+        run: |
+          mkdir -p chirpstack-pkgs
+          find sdk/bin -name "*.ipk" | grep -E "chirpstack|libloragw" \
+            | xargs -I{} cp {} chirpstack-pkgs/ 2>/dev/null || true
+          echo "--- ChirpStack IPKs (WM1302-USB-915) ---"
+          ls -lh chirpstack-pkgs/
+
+      - name: Upload ChirpStack IPKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: chirpstack-pkgs-${{ github.run_number }}
+          path: chirpstack-pkgs/
+          retention-days: 90
