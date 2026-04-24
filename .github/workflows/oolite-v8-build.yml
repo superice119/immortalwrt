@@ -56,20 +56,24 @@ jobs:
         run: |
           cd openwrt
           ./scripts/feeds update -a
-          # Patch Rust to 1.88.0 before install (chirpstack_api-4.16.0 requires >=1.88)
+          # Upgrade Rust to 1.90.0 (openwrt-24.10 validated version, supports edition=2024 let-chains)
           RUST_MK=feeds/packages/lang/rust/Makefile
-          sed -i 's/PKG_VERSION:=1\.85\.0/PKG_VERSION:=1.88.0/' "$RUST_MK"
-          sed -i 's/rustc-\$(PKG_VERSION)-src\.tar\.gz/rustc-$(PKG_VERSION)-src.tar.xz/' "$RUST_MK"
-          sed -i 's/PKG_HASH:=2f4f3142ffb7c8402139cfa0796e24baaac8b9fd3f96b2deec3b94b4045c6a8a/PKG_HASH:=0c1dcbb4f762513d021e1a282c0ac58c0a423642b3a6bf581cafb5414df4193e/' "$RUST_MK"
-          echo "Rust version after patch:"
-          grep -E "PKG_VERSION|PKG_SOURCE|PKG_HASH" "$RUST_MK"
-          # Remove patches that have context mismatches in 1.88.0:
-          # 0001: sysinfo version changed 0.33.0→0.35.0; 0003: libc Cargo.lock checksums differ
-          # On Ubuntu CI, liblzma is available as .so, so static xz2 patch is not needed.
+          sed -i 's/PKG_VERSION:=1\.85\.0/PKG_VERSION:=1.90.0/' "$RUST_MK"
+          # Change source extension from .tar.gz to .tar.xz (1.85→1.88+ uses .tar.xz)
+          sed -i 's|rustc-\$(PKG_VERSION)-src\.tar\.gz|rustc-$(PKG_VERSION)-src.tar.xz|' "$RUST_MK"
+          # Update hash to openwrt-24.10 verified SHA256 for rustc-1.90.0-src.tar.xz
+          sed -i 's|PKG_HASH:=.*|PKG_HASH:=6bfeaddd90ffda2f063492b092bfed925c4b8c701579baf4b1316e021470daac|' "$RUST_MK"
+          echo "Rust Makefile after patch:"
+          grep -E "PKG_VERSION|PKG_SOURCE:|PKG_HASH" "$RUST_MK"
+          # Replace 0001 patch with openwrt-24.10 version (sysinfo "0.36.0" matches 1.90.0)
+          # Remove old incompatible patches; 0003 does not exist in 24.10
           rm -f feeds/packages/lang/rust/patches/0001-Update-xz2-and-use-it-static.patch
           rm -f feeds/packages/lang/rust/patches/0003-bump-libc-deps-to-0.2.146.patch
-          echo "Rust patches after cleanup:"
-          ls feeds/packages/lang/rust/patches/ 2>/dev/null || echo "(none)"
+          curl -fsSL -o feeds/packages/lang/rust/patches/0001-Update-xz2-and-use-it-static.patch \
+            https://raw.githubusercontent.com/openwrt/packages/openwrt-24.10/lang/rust/patches/0001-Update-xz2-and-use-it-static.patch
+          echo "Rust patches after update:"
+          ls feeds/packages/lang/rust/patches/
+          head -5 feeds/packages/lang/rust/patches/0001-Update-xz2-and-use-it-static.patch
           ./scripts/feeds install -a
 
       - name: Configure build
@@ -208,20 +212,25 @@ jobs:
             > /dev/null 2>&1 || true
 
       - name: Build chirpstack-concentratord (Rust, mipsel_24kc, SX1302)
+        shell: bash
         run: |
+          set +e  # override GitHub Actions -e flag so we can capture and show logs on failure
           cd openwrt
           make package/feeds/chirpstack/chirpstack-concentratord/compile \
             -j$(nproc) V=s > /tmp/concentratord.log 2>&1
-          rc=$?; tail -50 /tmp/concentratord.log
+          rc=$?
+          tail -80 /tmp/concentratord.log
           if [ $rc -ne 0 ]; then
-            echo "Parallel build failed (exit $rc), retrying single-job..."
+            echo "::error::Parallel concentratord build failed (exit $rc), retrying single-job..."
             make package/feeds/chirpstack/chirpstack-concentratord/compile \
-              -j1 V=s 2>&1 | tail -200
+              -j1 V=s 2>&1 | tail -300
             exit 1
           fi
 
       - name: Build ChirpStack forwarders (MQTT + UDP, Rust)
+        shell: bash
         run: |
+          set +e  # override GitHub Actions -e flag so we can capture and show logs on failure
           cd openwrt
           for pkg in \
             chirpstack-mqtt-forwarder \
@@ -231,10 +240,11 @@ jobs:
             echo "=== Building $pkg ==="
             make package/feeds/chirpstack/$pkg/compile \
               -j$(nproc) V=s > /tmp/${pkg}.log 2>&1
-            rc=$?; tail -30 /tmp/${pkg}.log
+            rc=$?
+            tail -50 /tmp/${pkg}.log
             if [ $rc -ne 0 ]; then
-              echo "Parallel failed (exit $rc), retrying single-job..."
-              make package/feeds/chirpstack/$pkg/compile -j1 V=s 2>&1 | tail -150
+              echo "::error::Parallel $pkg build failed (exit $rc), retrying single-job..."
+              make package/feeds/chirpstack/$pkg/compile -j1 V=s 2>&1 | tail -200
               exit 1
             fi
           done
