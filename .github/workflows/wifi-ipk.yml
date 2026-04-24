@@ -59,8 +59,10 @@ jobs:
             'CONFIG_PACKAGE_kmod-mac80211=y' \
             'CONFIG_PACKAGE_kmod-cfg80211=y' \
             'CONFIG_PACKAGE_kmod-ath=y' \
+            'CONFIG_PACKAGE_kmod-hwmon-core=y' \
             'CONFIG_PACKAGE_ath10k-firmware-qca988x-ct=y' \
-            'CONFIG_PACKAGE_ath10k-board-qca988x=y' >> .config
+            'CONFIG_PACKAGE_ath10k-board-qca988x=y' \
+            'CONFIG_PACKAGE_wireless-regdb=y' >> .config
           make defconfig
 
       # Cache toolchain to speed up future runs
@@ -103,21 +105,23 @@ jobs:
       - name: Build ath10k packages
         run: |
           cd openwrt
+          # hwmon-core is a kmod-ath10k-ct dependency
+          make -j$(nproc) package/kernel/linux/compile \
+            BUILD_LOG=1 PACKAGE=kmod-hwmon-core 2>&1 | tail -10 || true
           make -j$(nproc) package/kernel/mac80211/compile \
             BUILD_LOG=1 2>&1 | tail -20
           make -j$(nproc) package/kernel/ath10k-ct/compile \
             BUILD_LOG=1 V=sc 2>&1 | tail -20
           make -j$(nproc) package/firmware/ath10k-ct-firmware/compile \
             BUILD_LOG=1 2>&1 | tail -20
-          make -j$(nproc) package/kernel/ath10k-ct/install \
-            package/firmware/ath10k-ct-firmware/install \
-            BUILD_LOG=1 2>&1 | tail -10 || true
+          # Build all IPKs and package index
+          make -j$(nproc) package/install BUILD_LOG=1 2>&1 | tail -20
           make -j$(nproc) package/index BUILD_LOG=1 2>&1 | tail -5 || true
 
       - name: Collect IPKs
         run: |
           mkdir -p wifi-ipks
-          find openwrt/bin -name "*.ipk" | grep -iE "ath10k|mac80211|cfg80211|kmod-ath" \
+          find openwrt/bin -name "*.ipk" | grep -iE "ath10k|mac80211|cfg80211|kmod-ath|hwmon-core|wireless-regdb" \
             | while read f; do
                 echo "Found: $f"
                 cp "$f" wifi-ipks/
