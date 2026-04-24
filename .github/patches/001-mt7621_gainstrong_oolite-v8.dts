@@ -140,6 +140,10 @@
 	};
 };
 
+&gmac1 {
+	status = "disabled";
+};
+
 &state_default {
 	gpio {
 		groups = "jtag", "rgmii2", "uart3", "wdt";
