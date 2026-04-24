@@ -1,0 +1,141 @@
+name: Build WiFi Packages for Oolite V8 (24.10)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ openwrt-24.10 ]
+    paths:
+      - '.github/workflows/wifi-ipk.yml'
+      - '.github/patches/004-dot-config'
+
+jobs:
+  build-wifi-pkgs:
+    name: Build ath10k packages (ramips/mt7621, kernel 6.6)
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repo (patches)
+        uses: actions/checkout@v4
+        with:
+          ref: openwrt-24.10
+          sparse-checkout: |
+            .github/patches
+            .github/workflows
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            build-essential clang flex bison g++ gawk gettext git \
+            libncurses-dev libssl-dev python3-distutils rsync unzip zlib1g-dev \
+            file wget curl zstd
+
+      - name: Clone ImmortalWrt openwrt-24.10
+        run: |
+          git clone --depth 1 \
+            https://github.com/superice119/immortalwrt.git \
+            -b openwrt-24.10 openwrt
+          echo "HEAD: $(git -C openwrt rev-parse --short HEAD)"
+
+      - name: Apply DTS and patches
+        run: |
+          cp .github/patches/001-mt7621_gainstrong_oolite-v8.dts \
+            openwrt/target/linux/ramips/dts/mt7621_gainstrong_oolite-v8.dts
+          python3 .github/patches/002-patch-mt7621-mk.py \
+            openwrt/target/linux/ramips/image/mt7621.mk
+          cp .github/patches/003-spi-nor-restore-4byte.patch \
+            openwrt/target/linux/ramips/patches-6.6/ 2>/dev/null || true
+
+      - name: Update feeds
+        run: |
+          cd openwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Configure build (packages only)
+        run: |
+          cd openwrt
+          # Apply base config
+          cat ../.github/patches/004-dot-config > .config
+          # Add WiFi packages
+          cat >> .config <<'EOF'
+CONFIG_PACKAGE_kmod-ath10k-ct=y
+CONFIG_PACKAGE_kmod-mac80211=y
+CONFIG_PACKAGE_kmod-cfg80211=y
+CONFIG_PACKAGE_kmod-ath=y
+CONFIG_PACKAGE_ath10k-firmware-qca988x-ct=y
+CONFIG_PACKAGE_ath10k-board-qca988x=y
+EOF
+          make defconfig
+
+      # Cache toolchain to speed up future runs
+      - name: Cache toolchain
+        uses: actions/cache@v4
+        id: cache-toolchain
+        with:
+          path: |
+            openwrt/staging_dir/toolchain-mipsel_24kc_gcc-13.3.0_musl
+            openwrt/staging_dir/host
+            openwrt/build_dir/host
+            openwrt/build_dir/toolchain-mipsel_24kc_gcc-13.3.0_musl
+          key: toolchain-24.10-mt7621-${{ hashFiles('openwrt/toolchain/**', 'openwrt/include/toolchain*.mk') }}
+          restore-keys: toolchain-24.10-mt7621-
+
+      - name: Build toolchain (if not cached)
+        if: steps.cache-toolchain.outputs.cache-hit != 'true'
+        run: |
+          cd openwrt
+          make -j$(nproc) tools/install toolchain/install \
+            BUILD_LOG=1 2>&1 | tail -20
+
+      # Cache kernel build to speed up future runs
+      - name: Cache kernel
+        uses: actions/cache@v4
+        id: cache-kernel
+        with:
+          path: |
+            openwrt/build_dir/target-mipsel_24kc_musl/linux-ramips_mt7621/linux-6.6.*
+          key: kernel-24.10-mt7621-${{ hashFiles('openwrt/target/linux/ramips/**', 'openwrt/target/linux/generic/**') }}
+          restore-keys: kernel-24.10-mt7621-
+
+      - name: Build kernel (for Module.symvers)
+        if: steps.cache-kernel.outputs.cache-hit != 'true'
+        run: |
+          cd openwrt
+          make -j$(nproc) target/linux/compile \
+            BUILD_LOG=1 2>&1 | tail -20
+
+      - name: Build ath10k packages
+        run: |
+          cd openwrt
+          # Build mac80211 stack (ath10k dependency)
+          make -j$(nproc) package/kernel/mac80211/compile \
+            BUILD_LOG=1 2>&1 | tail -20
+          # Build ath10k-ct kmod
+          make -j$(nproc) package/kernel/ath10k-ct/compile \
+            BUILD_LOG=1 V=sc 2>&1 | tail -20
+          # Build firmware
+          make -j$(nproc) package/firmware/ath10k-ct-firmware/compile \
+            BUILD_LOG=1 2>&1 | tail -20
+          # Build IPKs
+          make -j$(nproc) package/kernel/ath10k-ct/install \
+            package/firmware/ath10k-ct-firmware/install \
+            BUILD_LOG=1 2>&1 | tail -10 || true
+          make -j$(nproc) package/index BUILD_LOG=1 2>&1 | tail -5 || true
+
+      - name: Collect IPKs
+        run: |
+          mkdir -p wifi-ipks
+          find openwrt/bin -name "*.ipk" | grep -iE "ath10k|mac80211|cfg80211|kmod-ath" \
+            | while read f; do
+                echo "Found: $f"
+                cp "$f" wifi-ipks/
+              done
+          ls -lh wifi-ipks/
+
+      - name: Upload WiFi IPKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: wifi-ipks-oolite-v8-24.10-${{ github.run_number }}
+          path: wifi-ipks/
+          retention-days: 90
