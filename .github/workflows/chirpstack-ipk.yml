@@ -105,6 +105,16 @@ jobs:
           echo "ChirpStack packages available:"
           ls package/feeds/chirpstack/ 2>/dev/null | head -20
 
+      - name: Remove MT7628 half-duplex SPI patch (MT7621 is full-duplex)
+        run: |
+          PATCH="sdk/package/feeds/chirpstack/semtech/libloragw-sx1302/patches-ramips/5000_ramips_use_half_duplex_for_mt7628.patch"
+          if [ -f "$PATCH" ]; then
+            rm -f "$PATCH"
+            echo "Removed MT7628 half-duplex patch (not needed for MT7621 full-duplex SPI)"
+          else
+            echo "Patch not found: $PATCH"
+          fi
+
       - name: Configure ChirpStack packages
         run: |
           cd sdk
