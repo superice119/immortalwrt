@@ -122,6 +122,8 @@ jobs:
           CONFIG_PACKAGE_libloragw-sx1302=y
           CONFIG_PACKAGE_chirpstack-concentratord=y
           CONFIG_PACKAGE_chirpstack-concentratord-sx1302=y
+          CONFIG_PACKAGE_libloragw-2g4=y
+          CONFIG_PACKAGE_chirpstack-concentratord-2g4=y
           CONFIG_PACKAGE_chirpstack-mqtt-forwarder=y
           EOF
           make defconfig 2>&1 | grep -E "chirpstack|libloragw" || true
@@ -189,6 +191,12 @@ jobs:
             -j$(nproc) V=s > /tmp/libloragw.log 2>&1
           rc=$?; tail -20 /tmp/libloragw.log
           [ $rc -eq 0 ] || { tail -100 /tmp/libloragw.log; exit 1; }
+          echo "=== Building libloragw-2g4 (build dep for concentratord-2g4) ==="
+          make package/feeds/chirpstack/semtech/libloragw-2g4/compile \
+            -j$(nproc) V=s > /tmp/libloragw-2g4.log 2>&1 || \
+          make package/feeds/chirpstack/libloragw-2g4/compile \
+            -j$(nproc) V=s >> /tmp/libloragw-2g4.log 2>&1 || true
+          tail -5 /tmp/libloragw-2g4.log || true
 
       - name: Build chirpstack-concentratord (Rust cross-compile ~90 min first time)
         shell: bash
